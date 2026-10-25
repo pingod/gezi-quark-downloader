@@ -1,0 +1,40 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="GeZi.Avalonia.MiniWindow"
+        Title="鸽子下载"
+        Width="260" Height="120"
+        SystemDecorations="None"
+        Topmost="True"
+        Background="Transparent"
+        CanResize="False"
+        ShowInTaskbar="False">
+  <!-- 悬浮小窗：无边框、置顶、可拖动。显示总体下载进度。 -->
+  <Border Background="#E6202328" CornerRadius="10" Padding="12"
+          BorderBrush="#33FFFFFF" BorderThickness="1">
+    <Grid RowDefinitions="Auto,Auto,Auto">
+      <!-- 标题行（按住可拖动） -->
+      <Grid x:Name="DragArea" Grid.Row="0" ColumnDefinitions="Auto,*,Auto">
+        <TextBlock Grid.Column="0" Text="🕊" FontSize="14" VerticalAlignment="Center" />
+        <TextBlock x:Name="TitleText" Grid.Column="1" Text="下载中" FontSize="12"
+                   Foreground="#E8EAED" VerticalAlignment="Center" Margin="6,0,0,0" />
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4">
+          <Button x:Name="ShowBtn" Content="▣" FontSize="11" Padding="4,1"
+                  Background="Transparent" BorderThickness="0" Foreground="#98A0AA"
+                  Click="OnShowMainClick" ToolTip.Tip="显示主窗口" />
+          <Button x:Name="CloseBtn" Content="✕" FontSize="11" Padding="4,1"
+                  Background="Transparent" BorderThickness="0" Foreground="#98A0AA"
+                  Click="OnHideClick" ToolTip.Tip="隐藏小窗" />
+        </StackPanel>
+      </Grid>
+
+      <ProgressBar x:Name="Bar" Grid.Row="1" Value="0" Maximum="100"
+                   Height="6" Margin="0,10,0,0" Foreground="#2E7CF6" Background="#33FFFFFF" />
+
+      <Grid Grid.Row="2" ColumnDefinitions="*,Auto" Margin="0,8,0,0">
+        <TextBlock x:Name="DetailText" Grid.Column="0" Text="" FontSize="11" Foreground="#98A0AA" />
+        <TextBlock x:Name="PercentText" Grid.Column="1" Text="0%" FontSize="11"
+                   Foreground="#98A0AA" TextAlignment="Right" />
+      </Grid>
+    </Grid>
+  </Border>
+</Window>

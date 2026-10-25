@@ -17,6 +17,15 @@ namespace GeZi.Core.Support
     public static class QuarkConstants
     {
         public const string ApiBase = "https://drive-pc.quark.cn";
+
+        /// <summary>UC 网盘的 API 基址（与夸克同构，仅域名与 product 不同）。</summary>
+        public const string UcApiBase = "https://pc-api.uc.cn";
+
+        /// <summary>UC 网盘的站点来源（Referer/Origin 用）。</summary>
+        public const string UcOrigin = "https://drive.uc.cn";
+
+        /// <summary>UC 网盘的 pr 参数（夸克是 ucpro）。</summary>
+        public const string UcProduct = "UCBrowser";
         public const string AccountUrl = "https://pan.quark.cn/account/info";
         public const string Referer = "https://pan.quark.cn/";
         public const string Origin = "https://pan.quark.cn";

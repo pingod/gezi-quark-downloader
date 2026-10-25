@@ -1,7 +1,15 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net48</TargetFramework>
+    <!-- 双目标：
+         • net48  → Windows（WPF 版 GeZi.exe）的正式产物，保持原样
+         • net8.0 → Linux / macOS 原生版（GeZi.Avalonia）复用同一份核心逻辑
+         核心本身不含 UI，平台差异集中在 4 处，全部用 #if 分流且各有说明：
+           1) JSON      JavaScriptSerializer → System.Text.Json     (Support/JsonCompat.cs)
+           2) 密钥加密  DPAPI               → AES-GCM + 本机密钥文件 (Support/SecretProtector.cs)
+           3) 图片解码  GDI+                → SkiaSharp              (Support/ImageLoader.cs)
+           4) OpenSSL   libssl-3-x64.dll    → 系统 libssl.so.3       (Support/OpenSslTls.cs) -->
+    <TargetFrameworks>net48;net8.0</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <AssemblyName>GeZi.Core</AssemblyName>
@@ -16,17 +24,38 @@
     <PathMap>$(MSBuildProjectDirectory)=/_/</PathMap>
   </PropertyGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
     <!-- 零 NuGet 依赖，可离线编译：JSON 用框架自带 JavaScriptSerializer；HTTP 用 System.Net.Http -->
     <Reference Include="System.Net.Http" />
     <Reference Include="System.Web.Extensions" />
     <!-- DPAPI（ProtectedData）加密 Cookie -->
     <Reference Include="System.Security" />
+    <!-- System.Text.Json：net48 不自带，但清理队列等需要它做序列化。
+         用 NuGet 版（纯托管，无原生依赖），net8.0 侧用框架自带的。 -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
   </ItemGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
     <!--
-      ★ 二维码解码：ZXing.Net（Apache-2.0）
+      net8.0 分支的两个 NuGet 依赖：
+
+      • ZXing.Net —— 与 net48 用的是同一套 API，但 net48 那份是固化的 zxing.dll
+        （带 GDI+ 绑定）。这里必须走 NuGet 版，因为它的 netstandard2.0 目标
+        才提供 RGBLuminanceSource 这条纯字节数组通道 —— 我们已把图像管线
+        全部改成喂字节数组（见 Support/QrDecoder.cs），彻底不碰 System.Drawing。
+
+      • SkiaSharp —— 仅用于**解码图片文件**（Support/ImageLoader.cs）。
+        Avalonia 本身就把 libSkiaSharp 带进输出目录，所以这里等于零额外体积。
+        固定版本与 Avalonia 12 的依赖保持一致，避免解析出两份 native 库。
+    -->
+    <PackageReference Include="ZXing.Net" Version="0.16.10" />
+    <PackageReference Include="SkiaSharp" Version="3.119.4" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="3.119.4" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <!--
+      ★ 二维码解码：ZXing.Net（Apache-2.0）★ 仅 net48：net8.0 走 NuGet 版（见上）
       ==================================================================
       夸克分享有时只给一张二维码图片、不给文本链接，
       用户需要把图里的链接抠出来。解码要处理透视校正 + Reed-Solomon 纠错，
@@ -79,7 +108,7 @@
          ⚠️ 是 x64 DLL → 进程必须 64 位（AnyCPU 在 64 位系统上即为 x64）。
          ⚠️ 打包白名单（GeZiTest/package.py 的 KEEP_FILES / deploy.py）要同步这两个文件名！
     -->
-    <None Include="lib\OpenSSL\*.dll">
+    <None Include="lib\OpenSSL\*.dll" Condition="'$(TargetFramework)' == 'net48'">
       <Link>%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

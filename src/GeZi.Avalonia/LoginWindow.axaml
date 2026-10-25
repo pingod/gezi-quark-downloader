@@ -1,0 +1,56 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="GeZi.Avalonia.LoginWindow"
+        Title="登录夸克账号"
+        Width="560" Height="380"
+        WindowStartupLocation="CenterOwner"
+        Background="#1B1D21"
+        CanResize="False">
+  <Window.Styles>
+    <Style Selector="TextBlock">
+      <Setter Property="Foreground" Value="#E8EAED" />
+    </Style>
+    <Style Selector="TextBlock.dim">
+      <Setter Property="Foreground" Value="#98A0AA" />
+    </Style>
+    <Style Selector="TextBox">
+      <Setter Property="Background" Value="#22262B" />
+      <Setter Property="Foreground" Value="#E8EAED" />
+      <Setter Property="BorderBrush" Value="#3C4148" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="10,8" />
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="Background" Value="#2A2E35" />
+      <Setter Property="Foreground" Value="#E8EAED" />
+      <Setter Property="BorderBrush" Value="#3C4148" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="14,8" />
+    </Style>
+    <Style Selector="Button.accent">
+      <Setter Property="Background" Value="#2E7CF6" />
+      <Setter Property="BorderBrush" Value="#2E7CF6" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="20">
+    <TextBlock Grid.Row="0" Text="粘贴夸克 Cookie" FontSize="17" FontWeight="SemiBold" />
+
+    <TextBlock Grid.Row="1" Classes="dim" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,10"
+               Text="获取方式：用浏览器登录 pan.quark.cn → F12 打开开发者工具 → Network（网络）→ 刷新页面 → 随便点一个请求 → 复制请求头 Request Headers 里 Cookie 的整行内容。" />
+
+    <TextBox x:Name="CookieBox" Grid.Row="2"
+             AcceptsReturn="True" TextWrapping="Wrap"
+             PlaceholderText="把整行 Cookie 粘贴到这里（形如 __pus=xxx; __puus=yyy; ...）"
+             VerticalContentAlignment="Top" />
+
+    <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" Margin="0,14,0,0">
+      <TextBlock x:Name="Hint" Grid.Column="0" Classes="dim" VerticalAlignment="Center"
+                 FontSize="12" TextWrapping="Wrap" />
+      <Button Grid.Column="1" Content="取消" Margin="0,0,8,0" Click="OnCancelClick" />
+      <Button Grid.Column="2" Content="登录" Classes="accent" Click="OnOkClick" />
+    </Grid>
+  </Grid>
+</Window>

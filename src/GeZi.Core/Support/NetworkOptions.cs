@@ -45,6 +45,46 @@ namespace GeZi.Core.Support
         }
 
         /// <summary>
+        /// 按**环境变量**自动决定是否走代理（启动时调用一次）。
+        ///
+        /// 为什么需要它：程序默认强制直连（那是为了夸克 CDN 的正确行为 ——
+        /// 本机代理软件常把夸克接口劫持到 127.0.0.1，且代理会改变 TLS 指纹）。
+        /// 但在**容器 / 沙箱 / 公司网络**里，直连根本出不去，必须先经代理。
+        ///
+        /// 判定依据：有 http_proxy / https_proxy / all_proxy 任一非空，就启用代理。
+        /// 这条规则与 curl / git / npm 等工具的默认行为一致，
+        /// 用户不用再去设置页手动勾选。
+        /// </summary>
+        /// <returns>是否自动启用了代理</returns>
+        public static bool AutoDetectFromEnvironment()
+        {
+            try
+            {
+                string http = Environment.GetEnvironmentVariable("http_proxy")
+                              ?? Environment.GetEnvironmentVariable("HTTP_PROXY");
+                string https = Environment.GetEnvironmentVariable("https_proxy")
+                               ?? Environment.GetEnvironmentVariable("HTTPS_PROXY");
+                string all = Environment.GetEnvironmentVariable("all_proxy")
+                             ?? Environment.GetEnvironmentVariable("ALL_PROXY");
+
+                bool hasProxy = !string.IsNullOrWhiteSpace(http)
+                                || !string.IsNullOrWhiteSpace(https)
+                                || !string.IsNullOrWhiteSpace(all);
+
+                if (hasProxy)
+                {
+                    _useSystemProxy = true;
+                    return true;
+                }
+            }
+            catch
+            {
+                // 读环境变量失败 → 保持默认（直连）
+            }
+            return false;
+        }
+
+        /// <summary>
         /// 按当前开关给 handler 配置代理。**所有**构造 HttpClientHandler 的地方都应调它，
         /// 保证 API 层与下载层行为一致（否则会出现"能解析但下不动"这种半通状态）。
         /// </summary>

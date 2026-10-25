@@ -1,4 +1,4 @@
-﻿// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
+// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
 // Copyright (C) 2026  Yi Yuan
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -45,8 +45,19 @@ namespace GeZi.Core.Support
     /// </summary>
     public static class OpenSslTls
     {
+        // 库名按平台分流：
+        //   Windows(net48) → 项目内固化的 OpenSSL 3.5.7（libssl-3-x64.dll），随 exe 一起分发
+        //   Linux/macOS(net8) → 系统 OpenSSL 3.x：libssl.so.3 / libcrypto.so.3
+        //     ⚠️ Linux 上**不**自带 .so：系统包管理器装的即可，只要版本 ≥ 3.5
+        //        （X25519MLKEM768 混合密钥交换是 3.5 起默认开启的，扩展才够大到能过 ALB）。
+        //        实测本机 OpenSSL 3.6.5 可用；3.0.x 会因扩展太小被 RST。
+#if NET8_0_OR_GREATER
+        private const string SslDll = "libssl.so.3";
+        private const string CryptoDll = "libcrypto.so.3";
+#else
         private const string SslDll = "libssl-3-x64.dll";
         private const string CryptoDll = "libcrypto-3-x64.dll";
+#endif
 
         private static readonly object ProbeLock = new object();
         private static bool _probed;

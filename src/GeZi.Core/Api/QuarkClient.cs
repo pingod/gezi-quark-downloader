@@ -19,7 +19,6 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web.Script.Serialization;
 using GeZi.Core.Models;
 using GeZi.Core.Support;
 
@@ -38,15 +37,44 @@ namespace GeZi.Core.Api
 
         private static readonly Random Rng = new Random();
 
-        public QuarkClient(string cookie)
+        /// <summary>
+        /// API 基址。默认夸克，UC 网盘传 <see cref="QuarkConstants.UcApiBase"/> 即可复用
+        /// 全部逻辑 —— 两者接口**完全同构**，只有域名与 pr 不同（见 wenxi 的
+        /// quark_uc.dart：同一套代码用 base/origin/product 三个变量参数化）。
+        /// </summary>
+        private readonly string _apiBase;
+
+        /// <summary>pr 参数（夸克 ucpro / UC UCBrowser）。</summary>
+        private readonly string _product;
+
+        public QuarkClient(string cookie) : this(cookie, QuarkConstants.ApiBase, "ucpro") { }
+
+        /// <summary>
+        /// 用指定 API 基址构造（用于 UC 等与夸克同构的网盘）。
+        /// </summary>
+        public QuarkClient(string cookie, string apiBase, string product)
         {
             _session = new QuarkSession(cookie);
+            _apiBase = string.IsNullOrEmpty(apiBase) ? QuarkConstants.ApiBase : apiBase;
+            _product = string.IsNullOrEmpty(product) ? "ucpro" : product;
         }
+
+        /// <summary>当前使用的 API 基址。</summary>
+        public string ApiBaseUrl => _apiBase;
 
         // ---------------- Cookie ----------------
 
         /// <summary>实时汇总的 Cookie 串（含服务端 Set-Cookie 更新后的最新值）。</summary>
         public string CookieStr => _session.BuildCookieString();
+
+        /// <summary>
+        /// 上一次分享取链"失败但不是错误"的原因说明。
+        ///
+        /// 场景：接口返回 31001/23018（需登录/受限）时，直链确实拿不到，
+        /// 但这不是"出错"——正确做法是改走转存。此时方法返回 null 而不是抛异常，
+        /// 由这个属性带上人类可读的原因，供界面提示用户。
+        /// </summary>
+        public string ShareDirectUnavailableReason { get; private set; } = "";
 
         // ---------------- 底层请求 ----------------
 
@@ -345,8 +373,8 @@ namespace GeZi.Core.Api
         {
             try
             {
-                var res = await RequestAsync(HttpMethod.Get, QuarkConstants.ApiBase + "/1/clouddrive/member",
-                    new Dictionary<string, string> { { "pr", "ucpro" }, { "fr", "pc" } });
+                var res = await RequestAsync(HttpMethod.Get, _apiBase + "/1/clouddrive/member",
+                    new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" } });
                 Check(res, "查询网盘容量");
                 var data = AsDict(Get(AsDict(res), "data"));
                 long total = Pick(data, "total_capacity", "secret_total_capacity", "total");
@@ -375,8 +403,8 @@ namespace GeZi.Core.Api
 
         public async Task<string> GetStokenAsync(string pwdId, string passcode = "")
         {
-            var res = await RequestAsync(HttpMethod.Post, QuarkConstants.ApiBase + "/1/clouddrive/share/sharepage/token",
-                new Dictionary<string, string> { { "pr", "ucpro" }, { "fr", "pc" } },
+            var res = await RequestAsync(HttpMethod.Post, _apiBase + "/1/clouddrive/share/sharepage/token",
+                new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" } },
                 new { pwd_id = pwdId, passcode = passcode });
             Check(res, "获取分享凭证");
             return AsString(Get(AsDict(Get(AsDict(res), "data")), "stoken")) ?? "";
@@ -390,14 +418,14 @@ namespace GeZi.Core.Api
             {
                 var query = new Dictionary<string, string>
                 {
-                    { "pr", "ucpro" }, { "fr", "pc" },
+                    { "pr", _product }, { "fr", "pc" },
                     { "pwd_id", pwdId }, { "stoken", stoken }, { "pdir_fid", pdirFid },
                     { "force", "0" }, { "_page", page.ToString() }, { "_size", "50" },
                     { "_fetch_banner", "0" }, { "_fetch_share", "0" }, { "_fetch_total", "1" },
                     { "_sort", "file_type:asc,updated_at:desc" },
                     { "ver", "2" }, { "fetch_share_full_path", "0" },
                 };
-                var res = await RequestAsync(HttpMethod.Get, QuarkConstants.ApiBase + "/1/clouddrive/share/sharepage/detail", query);
+                var res = await RequestAsync(HttpMethod.Get, _apiBase + "/1/clouddrive/share/sharepage/detail", query);
                 Check(res, "读取分享列表");
                 var list = AsArray(Get(AsDict(Get(AsDict(res), "data")), "list"));
                 int added = 0;
@@ -438,7 +466,7 @@ namespace GeZi.Core.Api
         {
             var query = new Dictionary<string, string>
             {
-                { "pr", "ucpro" }, { "fr", "pc" },
+                { "pr", _product }, { "fr", "pc" },
                 { "pwd_id", pwdId }, { "stoken", stoken }, { "pdir_fid", pdirFid },
                 { "force", "0" }, { "_page", page.ToString() }, { "_size", DirPageSize.ToString() },
                 { "_fetch_banner", "0" }, { "_fetch_share", "0" }, { "_fetch_total", "1" },
@@ -446,7 +474,7 @@ namespace GeZi.Core.Api
                 { "ver", "2" }, { "fetch_share_full_path", "0" },
             };
             var res = await RequestAsync(HttpMethod.Get,
-                QuarkConstants.ApiBase + "/1/clouddrive/share/sharepage/detail", query);
+                _apiBase + "/1/clouddrive/share/sharepage/detail", query);
             Check(res, "读取分享列表");
             var one = new DirPage();
             var list = AsArray(Get(AsDict(Get(AsDict(res), "data")), "list"));
@@ -465,7 +493,7 @@ namespace GeZi.Core.Api
         {
             var query = new Dictionary<string, string>
             {
-                { "pr", "ucpro" }, { "fr", "pc" }, { "uc_param_str", "" },
+                { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" },
                 { "pdir_fid", pdirFid }, { "_page", page.ToString() }, { "_size", DirPageSize.ToString() },
                 { "_fetch_total", "1" }, { "_fetch_sub_dirs", "0" },
                 { "_sort", "file_type:asc,updated_at:desc" },
@@ -473,7 +501,7 @@ namespace GeZi.Core.Api
                 { "fetch_risk_file_name", "1" },
             };
             var res = await RequestAsync(HttpMethod.Get,
-                QuarkConstants.ApiBase + "/1/clouddrive/file/sort", query);
+                _apiBase + "/1/clouddrive/file/sort", query);
             Check(res, "读取网盘列表");
             var one = new DirPage();
             var list = AsArray(Get(AsDict(Get(AsDict(res), "data")), "list"));
@@ -503,7 +531,7 @@ namespace GeZi.Core.Api
         {
             var query = new Dictionary<string, string>
             {
-                { "pr", "ucpro" }, { "fr", "pc" }, { "uc_param_str", "" }, { "app", "clouddrive" },
+                { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" }, { "app", "clouddrive" },
                 { "__dt", Rng.Next(60000, 300001).ToString() },
                 { "__t", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString() },
             };
@@ -517,7 +545,7 @@ namespace GeZi.Core.Api
                 pdir_fid = "0",
                 scene = "link",
             };
-            var res = await RequestAsync(HttpMethod.Post, QuarkConstants.ApiBase + "/1/clouddrive/share/sharepage/save", query, body);
+            var res = await RequestAsync(HttpMethod.Post, _apiBase + "/1/clouddrive/share/sharepage/save", query, body);
             Check(res, "转存");
             string taskId = AsString(Get(AsDict(Get(AsDict(res), "data")), "task_id"));
             if (string.IsNullOrEmpty(taskId))
@@ -539,12 +567,12 @@ namespace GeZi.Core.Api
                 ct.ThrowIfCancellationRequested();
                 var query = new Dictionary<string, string>
                 {
-                    { "pr", "ucpro" }, { "fr", "pc" }, { "uc_param_str", "" },
+                    { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" },
                     { "task_id", taskId }, { "retry_index", retry.ToString() },
                     { "__dt", Rng.Next(60000, 300001).ToString() },
                     { "__t", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString() },
                 };
-                var res = await RequestAsync(HttpMethod.Get, QuarkConstants.ApiBase + "/1/clouddrive/task", query);
+                var res = await RequestAsync(HttpMethod.Get, _apiBase + "/1/clouddrive/task", query);
                 Check(res, "查询转存任务");
                 var data = AsDict(Get(AsDict(res), "data"));
                 long status = AsLong(Get(data, "status"));
@@ -613,14 +641,14 @@ namespace GeZi.Core.Api
             {
                 var query = new Dictionary<string, string>
                 {
-                    { "pr", "ucpro" }, { "fr", "pc" }, { "uc_param_str", "" },
+                    { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" },
                     { "pdir_fid", pdirFid }, { "_page", page.ToString() }, { "_size", "50" },
                     { "_fetch_total", "1" }, { "_fetch_sub_dirs", "0" },
                     { "_sort", "file_type:asc,updated_at:desc" },
                     { "_fetch_full_path", "0" }, { "fetch_all_file", "1" },
                     { "fetch_risk_file_name", "1" },
                 };
-                var res = await RequestAsync(HttpMethod.Get, QuarkConstants.ApiBase + "/1/clouddrive/file/sort", query);
+                var res = await RequestAsync(HttpMethod.Get, _apiBase + "/1/clouddrive/file/sort", query);
                 Check(res, "读取网盘列表");
                 var list = AsArray(Get(AsDict(Get(AsDict(res), "data")), "list"));
                 int added = 0;
@@ -642,8 +670,8 @@ namespace GeZi.Core.Api
 
         public async Task<string> PathFidAsync(string path)
         {
-            var res = await RequestAsync(HttpMethod.Post, QuarkConstants.ApiBase + "/1/clouddrive/file/info/path_list",
-                new Dictionary<string, string> { { "pr", "ucpro" }, { "fr", "pc" } },
+            var res = await RequestAsync(HttpMethod.Post, _apiBase + "/1/clouddrive/file/info/path_list",
+                new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" } },
                 new { file_path = new[] { path }, @namespace = "0" });
             Check(res, "查询目录");
             var arr = AsArray(Get(AsDict(res), "data"));
@@ -661,8 +689,8 @@ namespace GeZi.Core.Api
 
         public async Task<string> MkdirAsync(string path)
         {
-            var res = await RequestAsync(HttpMethod.Post, QuarkConstants.ApiBase + "/1/clouddrive/file",
-                new Dictionary<string, string> { { "pr", "ucpro" }, { "fr", "pc" }, { "uc_param_str", "" } },
+            var res = await RequestAsync(HttpMethod.Post, _apiBase + "/1/clouddrive/file",
+                new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" } },
                 new { pdir_fid = "0", file_name = "", dir_path = path, dir_init_lock = false });
             Check(res, "创建文件夹");
             string fid = AsString(Get(AsDict(Get(AsDict(res), "data")), "fid"));
@@ -684,11 +712,11 @@ namespace GeZi.Core.Api
             var attempts = new[]
             {
                 // 入口 1：PC 客户端入口（常规最优）
-                new Dictionary<string, string> { { "pr", "ucpro" }, { "fr", "pc" }, { "uc_param_str", "" } },
+                new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" } },
                 // 入口 2：网页端入口（CDN 选择策略可能不同）
-                new Dictionary<string, string> { { "pr", "ucpro" }, { "fr", "pc" }, { "uc_param_str", "" }, { "entry", "ft" } },
+                new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" }, { "entry", "ft" } },
                 // 入口 3：移动端入口（部分网络下反而更稳）
-                new Dictionary<string, string> { { "pr", "ucpro" }, { "fr", "android" }, { "uc_param_str", "" } },
+                new Dictionary<string, string> { { "pr", _product }, { "fr", "android" }, { "uc_param_str", "" } },
             };
 
             object lastRes = null;
@@ -700,7 +728,7 @@ namespace GeZi.Core.Api
                 try
                 {
                     var res = await RequestAsync(HttpMethod.Post,
-                        QuarkConstants.ApiBase + "/1/clouddrive/file/download", q,
+                        _apiBase + "/1/clouddrive/file/download", q,
                         new { fids = fids }).ConfigureAwait(false);
                     Check(res, "获取直链");
                     var list = ParseDownloadData(Get(AsDict(res), "data"));
@@ -733,9 +761,9 @@ namespace GeZi.Core.Api
         {
             var attempts = new[]
             {
-                new Dictionary<string, string> { { "entry", "ft" }, { "fr", "pc" }, { "pr", "ucpro" } },
-                new Dictionary<string, string> { { "pr", "ucpro" }, { "fr", "pc" }, { "uc_param_str", "" } },
-                new Dictionary<string, string> { { "pr", "ucpro" }, { "fr", "android" }, { "uc_param_str", "" } },
+                new Dictionary<string, string> { { "entry", "ft" }, { "fr", "pc" }, { "pr", _product } },
+                new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" } },
+                new Dictionary<string, string> { { "pr", _product }, { "fr", "android" }, { "uc_param_str", "" } },
             };
 
             object lastRes = null;
@@ -747,8 +775,30 @@ namespace GeZi.Core.Api
                 try
                 {
                     var res = await RequestAsync(HttpMethod.Post,
-                        QuarkConstants.ApiBase + "/1/clouddrive/file/download", q,
+                        _apiBase + "/1/clouddrive/file/download", q,
                         new { fids = fids, fids_token = tokens, pwd_id = pwdId, stoken = stoken }).ConfigureAwait(false);
+
+                    // ---- 错误码分流（照抄 wenxi 的实测规则，见 QuarkErrorCode 注释）----
+                    // 必须在 Check() 之前判断：Check 会把所有非成功码一律抛成
+                    // "取链失败"，那样就丢掉了"该降级还是该重试"的区别。
+                    long businessCode = AsLong(Get(AsDict(res), "code"));
+                    if (businessCode == QuarkErrorCode.ShareDownloadNeedLogin
+                        || businessCode == QuarkErrorCode.NotLoggedIn)
+                    {
+                        // 需要登录/受限 → 直链拿不到，但**文件本身还能下**（走转存）。
+                        // 返回 null 让上层改走转存路径，而不是当失败抛出去。
+                        ShareDirectUnavailableReason =
+                            "该分享的直接下载需要登录或已被限制，请登录后重试（或改用转存下载）";
+                        return null;
+                    }
+                    if (businessCode == QuarkErrorCode.ShareDownloadCredentialExpired
+                        || businessCode == QuarkErrorCode.ShareDownloadCredentialExpiredAlt)
+                    {
+                        // 凭证过期 → 可刷新 stoken 重试。用专门的异常让上层知道"能重试"。
+                        throw new QuarkShareCredentialExpiredException(
+                            "分享下载凭证已过期，请重新解析分享后重试");
+                    }
+
                     Check(res, "获取分享直链");
                     var list = ParseDownloadData(Get(AsDict(res), "data"));
                     if (IsUsable(list))
@@ -840,10 +890,199 @@ namespace GeZi.Core.Api
 
         public async Task DeleteAsync(IList<string> fids)
         {
-            var res = await RequestAsync(HttpMethod.Post, QuarkConstants.ApiBase + "/1/clouddrive/file/delete",
-                new Dictionary<string, string> { { "pr", "ucpro" }, { "fr", "pc" }, { "uc_param_str", "" } },
+            var res = await RequestAsync(HttpMethod.Post, _apiBase + "/1/clouddrive/file/delete",
+                new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" } },
                 new { action_type = 2, filelist = fids, exclude_fids = new string[0] });
             Check(res, "删除文件");
+        }
+
+        // ================= 原始请求（供上层扩展用） =================
+        //
+        // 为什么需要这组方法：上传流程（QuarkUploader）要发一些
+        // 不在本类职责内的请求（upload/pre、update/hash、upload/auth、OSS PUT），
+        // 但它们仍需复用本类的 Cookie 会话、请求头与鉴权重试。
+        // 与其在上层重新搭一套 HTTP，不如把"发请求"这一能力暴露出来。
+
+        /// <summary>
+        /// 发一个 API 请求（自动拼 API 基址 + 带鉴权头 + 处理业务错误）。
+        /// </summary>
+        /// <param name="path">以 / 开头的路径（如 /1/clouddrive/file/upload/pre）</param>
+        public async Task<object> RequestRawAsync(HttpMethod method, string path,
+            IDictionary<string, string> query = null, object body = null,
+            int timeoutSeconds = 60)
+        {
+            string url = path.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                ? path : _apiBase + path;
+
+            using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds)))
+            {
+                using (var resp = await _session.SendWithRetryAsync(() =>
+                {
+                    var req = new HttpRequestMessage(method, AppendQuery(url, query));
+                    QuarkSession.ApplyHeaders(req, url, api: true);
+
+                    if (body != null)
+                    {
+                        req.Content = new StringContent(JsonCompat.Serialize(body),
+                            Encoding.UTF8, "application/json");
+                    }
+                    return req;
+                }, 3, cts.Token).ConfigureAwait(false))
+                {
+                    string text = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    return JsonCompat.Deserialize(text);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 发一个**任意**HTTP 请求（不拼基址、不改头），用于 OSS 直传。
+        /// 只复用底层的 HttpClient（连接池 / TLS 配置）。
+        /// </summary>
+        public Task<HttpResponseMessage> SendRawAsync(HttpRequestMessage req,
+            CancellationToken ct = default)
+            => _session.Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+
+        private static string AppendQuery(string url, IDictionary<string, string> query)
+        {
+            if (query == null || query.Count == 0) return url;
+
+            var sb = new StringBuilder(url);
+            sb.Append(url.IndexOf('?') >= 0 ? '&' : '?');
+            bool first = true;
+            foreach (var kv in query)
+            {
+                if (!first) sb.Append('&');
+                sb.Append(Uri.EscapeDataString(kv.Key)).Append('=')
+                  .Append(Uri.EscapeDataString(kv.Value ?? ""));
+                first = false;
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 重命名文件/文件夹。
+        /// 夸克的重命名接口按 fid 提交，且**同一接口也用于移动**（file/move）。
+        /// </summary>
+        public async Task RenameAsync(string fid, string newName)
+        {
+            if (string.IsNullOrEmpty(fid))
+                throw new QuarkApiException("重命名失败: 文件ID为空");
+            if (string.IsNullOrEmpty(newName))
+                throw new QuarkApiException("重命名失败: 新名称为空");
+
+            var res = await RequestAsync(HttpMethod.Post, _apiBase + "/1/clouddrive/file/rename",
+                new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" } },
+                new { fid, file_name = newName });
+            Check(res, "重命名");
+        }
+
+        /// <summary>
+        /// 移动文件/文件夹到目标目录。
+        /// </summary>
+        public async Task MoveAsync(IList<string> fids, string toPdirFid)
+        {
+            if (fids == null || fids.Count == 0) return;
+
+            var res = await RequestAsync(HttpMethod.Post, _apiBase + "/1/clouddrive/file/move",
+                new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" } },
+                new
+                {
+                    action_type = 1,
+                    filelist = fids,
+                    to_pdir_fid = string.IsNullOrEmpty(toPdirFid) ? "0" : toPdirFid,
+                    exclude_fids = new string[0],
+                });
+            Check(res, "移动文件");
+        }
+
+        /// <summary>
+        /// 给 fid 解析出它在网盘里的**完整路径**（形如 <c>/我的文件/子目录</c>）。
+        ///
+        /// 为什么需要它：夸克的"新建文件夹"接口收的是 <c>dir_path</c>（路径字符串），
+        /// 而界面层只知道当前目录的 fid。所以要么逐级查 parents 拼出路径，
+        /// 要么每次操作都从根开始按名字往下找 —— 前者只需接口本身。
+        /// </summary>
+        public async Task<string> PathOfAsync(string fid)
+        {
+            if (string.IsNullOrEmpty(fid) || fid == "0")
+                return "/";
+
+            // 逐级向上找父目录，直到根
+            var segments = new List<string>();
+            string cur = fid;
+            var guard = new HashSet<string>();
+
+            for (int depth = 0; depth < 64; depth++)
+            {
+                if (string.IsNullOrEmpty(cur) || cur == "0") break;
+                if (!guard.Add(cur)) break;   // 防御：异常数据导致环
+
+                // file/info/path_list 能一次拿到该项的 path 信息
+                var res = await RequestAsync(HttpMethod.Post,
+                    _apiBase + "/1/clouddrive/file/info/path_list",
+                    new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" } },
+                    new { fid = new[] { cur }, _page = 1, _size = 50 });
+
+                Check(res, "查询文件路径");
+
+                var list = AsArray(Get(AsDict(Get(AsDict(res), "data")), "list"));
+                if (list == null || list.Length == 0) break;
+
+                var item = AsDict(list[0]);
+                string name = AsString(Get(item, "file_name"));
+                string parent = AsString(Get(item, "pdir_fid"));
+
+                if (!string.IsNullOrEmpty(name))
+                    segments.Insert(0, name);
+
+                if (string.IsNullOrEmpty(parent) || parent == "0" || parent == cur)
+                {
+                    // 再上一级是根 → 结束
+                    cur = "0";
+                    break;
+                }
+                cur = parent;
+            }
+
+            if (segments.Count == 0)
+                return "/";
+
+            // 去掉最外层（如果它就是"我的文件"之类的根显示名，保留也无害，但去掉更干净）
+            return "/" + string.Join("/", segments);
+        }
+
+        /// <summary>
+        /// 创建分享。
+        /// </summary>
+        /// <returns>(分享ID, 提取码)</returns>
+        public async Task<(string shareId, string passcode)> CreateShareAsync(
+            IList<string> fids, string passcode = "")
+        {
+            if (fids == null || fids.Count == 0)
+                throw new QuarkApiException("创建分享失败: 未选择文件");
+
+            var res = await RequestAsync(HttpMethod.Post,
+                _apiBase + "/1/clouddrive/share/create",
+                new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" } },
+                new
+                {
+                    fid_list = fids,
+                    title = "",
+                    url_type = 1,
+                    // 0 = 有提取码；1 = 无提取码
+                    passcode = passcode ?? "",
+                });
+            Check(res, "创建分享");
+
+            var data = AsDict(Get(AsDict(res), "data"));
+            string shareId = AsString(Get(data, "share_id")) ?? "";
+            string pwd = AsString(Get(data, "passcode")) ?? passcode ?? "";
+
+            if (string.IsNullOrEmpty(shareId))
+                throw new QuarkApiException("创建分享失败: 未返回分享ID");
+
+            return (shareId, pwd);
         }
 
         public async Task PurgeRecycleAsync(IList<string> fids)
@@ -852,11 +1091,11 @@ namespace GeZi.Core.Api
             var records = new List<string>();
             for (int page = 1; page <= 20; page++)
             {
-                var res = await RequestAsync(HttpMethod.Get, QuarkConstants.ApiBase + "/1/clouddrive/file/recycle/list",
+                var res = await RequestAsync(HttpMethod.Get, _apiBase + "/1/clouddrive/file/recycle/list",
                     new Dictionary<string, string>
                     {
                         { "_page", page.ToString() }, { "_size", "50" },
-                        { "pr", "ucpro" }, { "fr", "pc" }, { "uc_param_str", "" },
+                        { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" },
                     });
                 Check(res, "读取回收站");
                 var lst = AsArray(Get(AsDict(Get(AsDict(res), "data")), "list"));
@@ -881,8 +1120,8 @@ namespace GeZi.Core.Api
             }
             if (records.Count > 0)
             {
-                var res = await RequestAsync(HttpMethod.Post, QuarkConstants.ApiBase + "/1/clouddrive/file/recycle/remove",
-                    new Dictionary<string, string> { { "uc_param_str", "" }, { "fr", "pc" }, { "pr", "ucpro" } },
+                var res = await RequestAsync(HttpMethod.Post, _apiBase + "/1/clouddrive/file/recycle/remove",
+                    new Dictionary<string, string> { { "uc_param_str", "" }, { "fr", "pc" }, { "pr", _product } },
                     new { select_mode = 2, record_list = records });
                 Check(res, "清理回收站");
             }
@@ -917,11 +1156,12 @@ namespace GeZi.Core.Api
             };
         }
 
-        private static object Deserialize(string json)
-            => new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.DeserializeObject(json);
+        // JSON 走 JsonCompat：net48 上用 JavaScriptSerializer，net8.0 上用 System.Text.Json，
+        // 两者产出的对象形状一致（Dictionary<string,object> / object[] / 基础类型），
+        // 所以下面的 AsDict / AsLong 等取值代码跨平台通用。见 Support/JsonCompat.cs。
+        private static object Deserialize(string json) => JsonCompat.Deserialize(json);
 
-        private static string Serialize(object o)
-            => new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.Serialize(o);
+        private static string Serialize(object o) => JsonCompat.Serialize(o);
 
         private static Dictionary<string, object> AsDict(object o)
             => o as Dictionary<string, object>;
@@ -1026,10 +1266,10 @@ namespace GeZi.Core.Api
                 try
                 {
                     await RequestCoreAsync(HttpMethod.Get,
-                        QuarkConstants.ApiBase + "/1/clouddrive/file/sort",
+                        _apiBase + "/1/clouddrive/file/sort",
                         new Dictionary<string, string>
                         {
-                            { "pr", "ucpro" }, { "fr", "pc" },
+                            { "pr", _product }, { "fr", "pc" },
                             { "pdir_fid", "0" }, { "_page", "1" }, { "_size", "1" },
                         }, null, 10).ConfigureAwait(false);
                     return true;

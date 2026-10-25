@@ -35,3 +35,20 @@ namespace GeZi.Core.Api
         }
     }
 }
+
+namespace GeZi.Core.Api
+{
+    /// <summary>
+    /// 分享下载凭证过期（code 14001 / 41020）。
+    ///
+    /// 与普通 <see cref="QuarkApiException"/> 区分开，是因为它**可重试**：
+    /// 上层拿到它应该去重新解析分享换新 stoken，而不是直接告诉用户失败。
+    /// </summary>
+    public sealed class QuarkShareCredentialExpiredException : QuarkApiException
+    {
+        public QuarkShareCredentialExpiredException(string message)
+            : base(message, "share_credential_expired", null)
+        {
+        }
+    }
+}

@@ -1,0 +1,109 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="GeZi.Avalonia.SettingsWindow"
+        Title="设置"
+        Width="520" Height="520"
+        WindowStartupLocation="CenterOwner"
+        Background="#1B1D21">
+  <Window.Styles>
+    <Style Selector="TextBlock"><Setter Property="Foreground" Value="#E8EAED" /></Style>
+    <Style Selector="TextBlock.dim"><Setter Property="Foreground" Value="#98A0AA" /></Style>
+    <Style Selector="TextBlock.label"><Setter Property="VerticalAlignment" Value="Center" /><Setter Property="FontSize" Value="13" /></Style>
+    <Style Selector="Button">
+      <Setter Property="Background" Value="#2A2E35" />
+      <Setter Property="Foreground" Value="#E8EAED" />
+      <Setter Property="BorderBrush" Value="#3C4148" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="12,7" />
+    </Style>
+    <Style Selector="Button.accent">
+      <Setter Property="Background" Value="#2E7CF6" />
+      <Setter Property="BorderBrush" Value="#2E7CF6" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="ComboBox">
+      <Setter Property="Background" Value="#22262B" />
+      <Setter Property="Foreground" Value="#E8EAED" />
+      <Setter Property="BorderBrush" Value="#3C4148" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="10,6" />
+    </Style>
+    <Style Selector="NumericUpDown">
+      <Setter Property="Background" Value="#22262B" />
+      <Setter Property="Foreground" Value="#E8EAED" />
+      <Setter Property="BorderBrush" Value="#3C4148" />
+      <Setter Property="CornerRadius" Value="6" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="*,Auto" Margin="20">
+    <ScrollViewer Grid.Row="0">
+      <StackPanel Spacing="16">
+
+        <TextBlock Text="下载" FontSize="15" FontWeight="SemiBold" />
+
+        <Grid ColumnDefinitions="150,*" RowDefinitions="Auto,Auto,Auto">
+          <TextBlock Grid.Row="0" Grid.Column="0" Text="保存目录" Classes="label" />
+          <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+            <TextBlock x:Name="DirText" Classes="dim" VerticalAlignment="Center"
+                       MaxWidth="230" TextTrimming="CharacterEllipsis" />
+            <Button Content="更改" Padding="10,4" Click="OnChooseDirClick" />
+          </StackPanel>
+
+          <TextBlock Grid.Row="1" Grid.Column="0" Text="每个文件并发连接" Classes="label" Margin="0,10,0,0" />
+          <NumericUpDown x:Name="ThreadsBox" Grid.Row="1" Grid.Column="1"
+                         Minimum="1" Maximum="1024" Increment="16" Margin="0,10,0,0" />
+
+          <TextBlock Grid.Row="2" Grid.Column="0" Text="同时下载任务" Classes="label" Margin="0,10,0,0" />
+          <NumericUpDown x:Name="ConcurrentBox" Grid.Row="2" Grid.Column="1"
+                         Minimum="1" Maximum="16" Increment="1" Margin="0,10,0,0" />
+        </Grid>
+
+        <Border Height="1" Background="#2E3339" />
+
+        <TextBlock Text="外观" FontSize="15" FontWeight="SemiBold" />
+
+        <Grid ColumnDefinitions="150,*" RowDefinitions="Auto,Auto">
+          <TextBlock Grid.Row="0" Grid.Column="0" Text="主题" Classes="label" />
+          <ComboBox x:Name="ThemeBox" Grid.Row="0" Grid.Column="1" HorizontalAlignment="Stretch">
+            <ComboBoxItem Content="跟随系统" />
+            <ComboBoxItem Content="浅色" />
+            <ComboBoxItem Content="深色" />
+          </ComboBox>
+
+          <TextBlock Grid.Row="1" Grid.Column="0" Text="关闭窗口时" Classes="label" Margin="0,10,0,0" />
+          <ComboBox x:Name="CloseBox" Grid.Row="1" Grid.Column="1" Margin="0,10,0,0"
+                    HorizontalAlignment="Stretch">
+            <ComboBoxItem Content="每次询问" />
+            <ComboBoxItem Content="最小化到托盘" />
+            <ComboBoxItem Content="直接退出" />
+          </ComboBox>
+        </Grid>
+
+        <CheckBox x:Name="MiniBox" Content="显示悬浮小窗（无边框置顶，可拖动）" />
+
+        <Border Height="1" Background="#2E3339" />
+
+        <TextBlock Text="播放器（边下边播）" FontSize="15" FontWeight="SemiBold" />
+
+        <StackPanel Spacing="6">
+          <TextBlock x:Name="PlayerHint" Classes="dim" FontSize="12" TextWrapping="Wrap" />
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock x:Name="PlayerText" Classes="dim" VerticalAlignment="Center"
+                       MaxWidth="280" TextTrimming="CharacterEllipsis" />
+            <Button Content="自动探测" Padding="10,4" Click="OnDetectPlayerClick" />
+            <Button Content="指定…" Padding="10,4" Click="OnChoosePlayerClick" />
+          </StackPanel>
+        </StackPanel>
+
+      </StackPanel>
+    </ScrollViewer>
+
+    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8"
+                HorizontalAlignment="Right" Margin="0,16,0,0">
+      <Button Content="取消" Click="OnCancelClick" />
+      <Button Content="保存" Classes="accent" Click="OnSaveClick" />
+    </StackPanel>
+  </Grid>
+</Window>

@@ -1,0 +1,62 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="GeZi.Avalonia.AccountWindow"
+        Title="账号管理"
+        Width="520" Height="460"
+        WindowStartupLocation="CenterOwner"
+        Background="#1B1D21">
+  <Window.Styles>
+    <Style Selector="TextBlock"><Setter Property="Foreground" Value="#E8EAED" /></Style>
+    <Style Selector="TextBlock.dim"><Setter Property="Foreground" Value="#98A0AA" /></Style>
+    <Style Selector="Button">
+      <Setter Property="Background" Value="#2A2E35" />
+      <Setter Property="Foreground" Value="#E8EAED" />
+      <Setter Property="BorderBrush" Value="#3C4148" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="12,7" />
+    </Style>
+    <Style Selector="Button.accent">
+      <Setter Property="Background" Value="#2E7CF6" />
+      <Setter Property="BorderBrush" Value="#2E7CF6" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="ListBox">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,*,Auto" Margin="20">
+    <TextBlock Grid.Row="0" Text="已保存的账号" FontSize="16" FontWeight="SemiBold" />
+
+    <ListBox x:Name="AccountList" Grid.Row="1" Margin="0,12,0,0">
+      <ListBox.ItemTemplate>
+        <DataTemplate>
+          <Border Background="#22262B" CornerRadius="8" Padding="12" Margin="0,3">
+            <Grid ColumnDefinitions="*,Auto">
+              <StackPanel Grid.Column="0">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="{Binding PlatformLabel}" FontSize="11"
+                             Foreground="#7BA7F0" VerticalAlignment="Center" />
+                  <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                </StackPanel>
+                <TextBlock Text="{Binding Key}" Classes="dim" FontSize="11" Margin="0,3,0,0" />
+              </StackPanel>
+              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                <Button Content="切换" Padding="10,4" Click="OnSwitchClick" />
+                <Button Content="删除" Padding="10,4" Click="OnDeleteClick" />
+              </StackPanel>
+            </Grid>
+          </Border>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+
+    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8" Margin="0,12,0,0">
+      <Button Content="扫码添加账号" Classes="accent" Click="OnAddByQrClick" />
+      <Button Content="用 Cookie 添加" Click="OnAddByCookieClick" />
+      <TextBlock x:Name="Hint" Classes="dim" VerticalAlignment="Center" FontSize="12" />
+    </StackPanel>
+  </Grid>
+</Window>

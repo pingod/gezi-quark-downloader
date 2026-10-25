@@ -139,6 +139,8 @@ namespace GeZi.Core.Download
                         dl.Log = Log;
                         dl.Diagnostics = Diagnostics;
                         dl.LinkRefresher = job.LinkRefresher;
+                        // 平台专用请求头（百度/115/阿里等差异极大，由 provider 提供）
+                        dl.ExtraHeaders = job.Headers.Count > 0 ? job.Headers : null;
                         // 免转存任务：失败文案不能说"可续传"（stoken 过期就取不到新链）
                         dl.ResumeCannotRefresh = job.ResumeCannotRefresh;
                         var perFile = new JobProgressAdapter(job, progress);

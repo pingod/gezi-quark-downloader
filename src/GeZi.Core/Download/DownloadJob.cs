@@ -12,6 +12,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -25,6 +26,27 @@ namespace GeZi.Core.Download
         public string Url { get; set; } = "";
         public string Dest { get; set; } = "";
         public string Cookie { get; set; } = "";
+
+        /// <summary>
+        /// 下载时必须额外带的请求头（多网盘 provider 提供）。
+        ///
+        /// 为什么必须有：不同网盘的直链对 headers 要求差异极大 ——
+        ///   百度：必须带 Cookie(含 BDCLND) + Accept-Encoding:identity
+        ///         + Content-Transfer-Encoding:binary，缺一个就 403
+        ///   阿里：UA + 特定 Referer（OSS 签名里绑了它）
+        ///   115：只需 UA + Referer，**反而不能带登录 Cookie**
+        ///   微云：要带从响应里提取的临时 cookie
+        /// 没有这个字段就只能把所有平台的 header 规则硬塞进下载器，
+        /// 那既耦合又必然顾此失彼。
+        /// </summary>
+        public Dictionary<string, string> Headers { get; } =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// 预期大小（0 = 未知）。多网盘 provider 能提前给出精确大小时填上，
+        /// 用于进度显示与"下完立即校验"。
+        /// </summary>
+        public long ExpectedSize { get; set; }
         /// <summary>0 表示用默认线程数。</summary>
         public int Threads { get; set; } = 0;
 

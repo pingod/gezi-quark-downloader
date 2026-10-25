@@ -17,7 +17,6 @@ using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web.Script.Serialization;
 using GeZi.Core.Support;
 
 namespace GeZi.Core.Api
@@ -407,8 +406,8 @@ namespace GeZi.Core.Api
             }
         }
 
-        private static object Deserialize(string json)
-            => new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.DeserializeObject(json);
+        // 见 Support/JsonCompat.cs：net48 → JavaScriptSerializer，net8.0 → System.Text.Json
+        private static object Deserialize(string json) => JsonCompat.Deserialize(json);
 
         private static Dictionary<string, object> AsDict(object o) => o as Dictionary<string, object>;
 

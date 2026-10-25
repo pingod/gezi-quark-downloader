@@ -63,6 +63,18 @@ namespace GeZi.Core.Download
         public static bool HidePartsDir { get; set; } = true;
 
         /// <summary>
+        /// 调用方提供、需要**覆盖**默认值的请求头（多网盘平台用）。
+        ///
+        /// 用途：不同网盘的直链要求差异极大（百度要比 binary 头、115 反而不能带 Cookie、
+        /// 阿里要特定 Referer）。这些规则属于"平台知识"，不该硬编码进下载器，
+        /// 所以由 provider 提供、这里做最后一步合并。
+        ///
+        /// 合并策略：**外部优先**（覆盖同名的默认头）。
+        /// 唯一的例外是 User-Agent —— 见下面 BuildHeaders 的说明。
+        /// </summary>
+        public IDictionary<string, string> ExtraHeaders { get; set; }
+
+        /// <summary>
         /// 诊断日志出口。UI 层可挂上去看"到底切了几片、用了几个连接"，
         /// 否则线程数设置是否生效对用户完全是黑箱。
         /// </summary>
@@ -860,6 +872,26 @@ namespace GeZi.Core.Download
             h["Sec-Fetch-Dest"] = "empty";
             h["Sec-Fetch-Mode"] = "cors";
             h["Sec-Fetch-Site"] = "cross-site";
+
+            // 合并调用方提供的平台专用头（外部优先覆盖）
+            if (ExtraHeaders != null)
+            {
+                foreach (var kv in ExtraHeaders)
+                {
+                    if (string.IsNullOrEmpty(kv.Key)) continue;
+
+                    // ⚠️ 有些平台（115/天翼）**不能**带 Cookie：
+                    //    带了登录 Cookie 到 CDN 反而被判盗链。
+                    //    用空值表示"显式移除"这个头。
+                    if (string.IsNullOrEmpty(kv.Value))
+                    {
+                        h.Remove(kv.Key);
+                        continue;
+                    }
+
+                    h[kv.Key] = kv.Value;
+                }
+            }
             return h;
         }
 

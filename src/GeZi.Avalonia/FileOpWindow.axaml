@@ -1,0 +1,102 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="GeZi.Avalonia.FileOpWindow"
+        Title="文件操作"
+        Width="480" Height="360"
+        WindowStartupLocation="CenterOwner"
+        Background="#1B1D21"
+        CanResize="False">
+  <Window.Styles>
+    <Style Selector="TextBlock"><Setter Property="Foreground" Value="#E8EAED" /></Style>
+    <Style Selector="TextBlock.dim"><Setter Property="Foreground" Value="#98A0AA" /></Style>
+    <Style Selector="TextBlock.label"><Setter Property="VerticalAlignment" Value="Center" /><Setter Property="FontSize" Value="13" /></Style>
+    <Style Selector="TextBox">
+      <Setter Property="Background" Value="#22262B" />
+      <Setter Property="Foreground" Value="#E8EAED" />
+      <Setter Property="BorderBrush" Value="#3C4148" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="10,8" />
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="Background" Value="#2A2E35" />
+      <Setter Property="Foreground" Value="#E8EAED" />
+      <Setter Property="BorderBrush" Value="#3C4148" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="14,8" />
+    </Style>
+    <Style Selector="Button.accent">
+      <Setter Property="Background" Value="#2E7CF6" />
+      <Setter Property="BorderBrush" Value="#2E7CF6" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="ComboBox">
+      <Setter Property="Background" Value="#22262B" />
+      <Setter Property="Foreground" Value="#E8EAED" />
+      <Setter Property="BorderBrush" Value="#3C4148" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="10,6" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,*,Auto" Margin="22">
+    <!-- 标题 -->
+    <StackPanel Grid.Row="0" Spacing="4">
+      <TextBlock x:Name="TitleText" Text="操作" FontSize="17" FontWeight="SemiBold" />
+      <TextBlock x:Name="SubText" Classes="dim" FontSize="12" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <!-- 表单区（按操作类型切换可见性） -->
+    <StackPanel Grid.Row="1" Spacing="14" Margin="0,18,0,0">
+
+      <!-- 新建文件夹 / 重命名：单个输入框 -->
+      <StackPanel x:Name="NamePanel" Spacing="6">
+        <TextBlock x:Name="NameLabel" Text="名称" Classes="label" />
+        <TextBox x:Name="NameBox" />
+      </StackPanel>
+
+      <!-- 创建分享：有效期 + 提取码 -->
+      <StackPanel x:Name="SharePanel" Spacing="10" IsVisible="False">
+        <Grid ColumnDefinitions="140,*">
+          <TextBlock Grid.Column="0" Text="有效期" Classes="label" />
+          <ComboBox x:Name="ExpiryBox" Grid.Column="1" HorizontalAlignment="Stretch">
+            <ComboBoxItem Content="永久有效" />
+            <ComboBoxItem Content="1 天" />
+            <ComboBoxItem Content="7 天" />
+            <ComboBoxItem Content="30 天" />
+          </ComboBox>
+        </Grid>
+        <Grid ColumnDefinitions="140,*">
+          <TextBlock Grid.Column="0" Text="提取码" Classes="label" />
+          <TextBox x:Name="PasscodeBox" Grid.Column="1" PlaceholderText="留空 = 由平台生成" />
+        </Grid>
+      </StackPanel>
+
+      <!-- 移动：目标目录输入 -->
+      <StackPanel x:Name="MovePanel" Spacing="6" IsVisible="False">
+        <TextBlock Text="目标目录 ID" Classes="label" />
+        <TextBox x:Name="TargetBox" PlaceholderText="0 = 根目录" />
+        <TextBlock Classes="dim" FontSize="11" TextWrapping="Wrap"
+                   Text="提示：可先在列表里进入目标文件夹，再回来操作（会用当前目录）。" />
+      </StackPanel>
+
+      <!-- 结果展示（创建分享后显示链接） -->
+      <StackPanel x:Name="ResultPanel" Spacing="6" IsVisible="False">
+        <TextBlock Text="分享链接" Classes="label" />
+        <TextBox x:Name="ResultBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" Height="70" />
+        <Button Content="复制链接" Click="OnCopyClick" HorizontalAlignment="Left" Padding="10,4" />
+      </StackPanel>
+
+      <!-- 提示区 -->
+      <TextBlock x:Name="Hint" Classes="dim" FontSize="12" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <!-- 按钮 -->
+    <Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" Margin="0,16,0,0">
+      <TextBlock x:Name="WarnText" Grid.Column="0" Classes="dim" FontSize="12"
+                 VerticalAlignment="Center" TextWrapping="Wrap" />
+      <Button Grid.Column="1" Content="取消" Margin="0,0,8,0" Click="OnCancelClick" />
+      <Button x:Name="OkBtn" Grid.Column="2" Content="确定" Classes="accent" Click="OnOkClick" />
+    </Grid>
+  </Grid>
+</Window>

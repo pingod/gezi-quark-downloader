@@ -1,0 +1,60 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="GeZi.Avalonia.PlatformPickerWindow"
+        Title="选择网盘"
+        Width="460" Height="480"
+        WindowStartupLocation="CenterOwner"
+        Background="#1B1D21">
+  <Window.Styles>
+    <Style Selector="TextBlock"><Setter Property="Foreground" Value="#E8EAED" /></Style>
+    <Style Selector="TextBlock.dim"><Setter Property="Foreground" Value="#98A0AA" /></Style>
+    <Style Selector="Button">
+      <Setter Property="Background" Value="#2A2E35" />
+      <Setter Property="Foreground" Value="#E8EAED" />
+      <Setter Property="BorderBrush" Value="#3C4148" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="14,8" />
+    </Style>
+    <Style Selector="Button.accent">
+      <Setter Property="Background" Value="#2E7CF6" />
+      <Setter Property="BorderBrush" Value="#2E7CF6" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="ListBox">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="20">
+    <TextBlock Grid.Row="0" Text="选择要浏览的网盘" FontSize="16" FontWeight="SemiBold" />
+
+    <TextBlock Grid.Row="1" Classes="dim" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,10"
+               Text="灰色项表示该平台已接入协议，但当前还缺少对应账号凭据或实现。" />
+
+    <ListBox x:Name="PlatformList" Grid.Row="2">
+      <ListBox.ItemTemplate>
+        <DataTemplate>
+          <Border Background="#22262B" CornerRadius="8" Padding="14,10" Margin="0,3">
+            <Grid ColumnDefinitions="*,Auto">
+              <StackPanel Grid.Column="0" Spacing="3">
+                <TextBlock Text="{Binding Label}" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding Detail}" Classes="dim" FontSize="11" />
+              </StackPanel>
+              <TextBlock Grid.Column="1" Text="{Binding Badge}" Classes="dim"
+                         VerticalAlignment="Center" FontSize="11" />
+            </Grid>
+          </Border>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+
+    <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" Margin="0,14,0,0">
+      <TextBlock x:Name="Hint" Grid.Column="0" Classes="dim" FontSize="12"
+                 VerticalAlignment="Center" TextWrapping="Wrap" />
+      <Button Grid.Column="1" Content="取消" Margin="0,0,8,0" Click="OnCancelClick" />
+      <Button Grid.Column="2" Content="打开" Classes="accent" Click="OnOkClick" />
+    </Grid>
+  </Grid>
+</Window>

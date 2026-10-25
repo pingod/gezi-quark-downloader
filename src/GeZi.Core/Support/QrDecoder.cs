@@ -1,21 +1,21 @@
-﻿// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
+// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
 // Copyright (C) 2026  Yi Yuan
+//
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
+//
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
+//
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
 using System.IO;
 using ZXing;
 using ZXing.Common;
@@ -36,6 +36,16 @@ namespace GeZi.Core.Support
     ///   5) 反转色（深浅色主题下的"反色二维码"）
     ///   6) 中央裁剪重试（二维码只占图片一小块时，裁掉无关区域减少干扰）
     /// 任一命中即返回，避免无谓开销。
+    ///
+    /// ★ 跨平台（2026-10 移植）：整条图像管线**不再依赖 System.Drawing**。
+    ///   原始实现用 GDI+ 的 Bitmap/Graphics 做缩放、灰度、二值化，那套 API 在
+    ///   Linux/macOS 上不可用（.NET 6+ 的 System.Drawing.Common 直接抛
+    ///   PlatformNotSupportedException）。现在改成：
+    ///     解码图片 → <see cref="Pixels"/>（32bpp BGRA 纯托管数组）
+    ///     所有变换都在这个数组上做，ZXing 侧统一走
+    ///     <see cref="RGBLuminanceSource"/>（它只吃字节数组，完全跨平台）。
+    ///   好处不只是"能跑"：net48 与 net8.0 现在跑的是**同一份图像处理代码**，
+    ///   不再有"Windows 上能用、Linux 上行为不同"的分裂。
     /// </summary>
     public static class QrDecoder
     {
@@ -74,8 +84,40 @@ namespace GeZi.Core.Support
         /// <summary>按最大边限制的尺寸（超大图缩到这个量级再解）。</summary>
         private const int MaxSide = 4000;
 
+        // ================= 纯托管像素容器 =================
+
         /// <summary>
-        /// 从图片文件解码。支持 png / jpg / bmp / gif 等 GDI+ 能读的格式。
+        /// 32bpp BGRA 像素缓冲（每像素 4 字节，行间无 padding）。
+        /// 用它替代原来的 GDI+ Bitmap：所有图像变换都是对 <see cref="Data"/> 的纯数组操作。
+        /// </summary>
+        public sealed class Pixels
+        {
+            public readonly int Width;
+            public readonly int Height;
+            public readonly byte[] Data;   // BGRA, stride = Width * 4
+
+            public Pixels(int w, int h)
+            {
+                Width = w;
+                Height = h;
+                Data = new byte[w * h * 4];
+            }
+
+            public Pixels(int w, int h, byte[] data)
+            {
+                Width = w;
+                Height = h;
+                Data = data;
+            }
+
+            public Pixels Clone()
+                => new Pixels(Width, Height, (byte[])Data.Clone());
+        }
+
+        // ================= 公开入口 =================
+
+        /// <summary>
+        /// 从图片文件解码。支持 png / jpg / bmp / gif / webp 等常见格式。
         /// </summary>
         public static Result DecodeFile(string path)
         {
@@ -84,101 +126,83 @@ namespace GeZi.Core.Support
             if (!File.Exists(path))
                 return Fail("文件不存在：" + path);
 
-            Bitmap bmp = null;
+            byte[] bytes;
             try
             {
-                // 不用 Image.FromFile —— 那样会一直占着文件句柄，
-                // 从流加载可以让本方法返回后立刻释放（用户可能马上删/移这张图）。
-                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                {
-                    bmp = new Bitmap(fs);
-                }
+                // 一次读进内存：不占文件句柄（用户可能马上删/移这张图）
+                bytes = File.ReadAllBytes(path);
             }
             catch (Exception ex)
             {
                 return Fail("图片读取失败：" + ex.Message);
             }
-
-            using (bmp)
-            {
-                return Decode(bmp);
-            }
+            return DecodeBytes(bytes);
         }
 
         /// <summary>
-        /// 从内存字节解码（贴剪贴板图片用；剪贴板拿到的是 DIB 字节，没有路径）。
+        /// 从内存字节解码（贴剪贴板图片、拖拽文件都走这里）。
         /// </summary>
         public static Result DecodeBytes(byte[] bytes)
         {
             if (bytes == null || bytes.Length == 0)
                 return Fail("图片数据为空");
 
+            Pixels src;
             try
             {
-                using (var ms = new MemoryStream(bytes, writable: false))
-                using (var bmp = new Bitmap(ms))
-                {
-                    return Decode(bmp);
-                }
+                src = ImageLoader.Load(bytes);
             }
             catch (Exception ex)
             {
                 return Fail("图片解析失败：" + ex.Message);
             }
+            if (src == null)
+                return Fail("图片格式不支持（可试试 PNG / JPG / BMP）");
+
+            return DecodePixels(src);
         }
 
-        /// <summary>从已加载的 Bitmap 解码。</summary>
-        public static Result Decode(Bitmap source)
+        /// <summary>从已解码的像素缓冲解码（供 UI 层直接把屏幕截图喂进来）。</summary>
+        public static Result DecodePixels(Pixels src)
         {
-            if (source == null || source.Width <= 0 || source.Height <= 0)
+            if (src == null || src.Width <= 0 || src.Height <= 0)
                 return Fail("图片无效");
 
             try
             {
-                using (var work = Normalize(source))
+                Pixels work = Normalize(src);
+
+                // ---- 第 1 轮：原图 ----
+                var r = TryDecode(work, "原图");
+                if (r != null) return r;
+
+                // ---- 第 2 轮：放大 ----
+                var up = Resize(work, work.Width * UpscaleFactor, work.Height * UpscaleFactor);
+                r = TryDecode(up, "放大 " + UpscaleFactor + "×");
+                if (r != null) return r;
+
+                // ---- 第 3 轮：灰度增强对比 ----
+                var gray = ToGray(work, contrast: true);
+                r = TryDecode(gray, "灰度增强");
+                if (r != null) return r;
+
+                // ---- 第 4 轮：灰度 + 二值化（Otsu 阈值） ----
+                var bw = Binarize(gray);
+                r = TryDecode(bw, "二值化");
+                if (r != null) return r;
+
+                // ---- 第 5 轮：反转色（深色主题截图里的"反色二维码"） ----
+                var inv = Invert(work);
+                r = TryDecode(inv, "反色");
+                if (r != null) return r;
+
+                // ---- 第 6 轮：中央裁剪（码只占画面一小块） ----
+                foreach (int keepPct in new[] { 80, 60, 40 })
                 {
-                    // ---- 第 1 轮：原图 ----
-                    var r = TryDecode(work, "原图");
+                    var crop = CenterCrop(work, keepPct);
+                    if (crop == null) continue;
+                    r = TryDecode(crop, "中央裁剪 " + keepPct + "%");
                     if (r != null) return r;
-
-                    // ---- 第 2 轮：放大 ----
-                    using (var up = Resize(work, work.Width * UpscaleFactor, work.Height * UpscaleFactor))
-                    {
-                        r = TryDecode(up, "放大 " + UpscaleFactor + "×");
-                        if (r != null) return r;
-                    }
-
-                    // ---- 第 3 轮：灰度增强对比 ----
-                    using (var gray = ToGray(work, contrast: true))
-                    {
-                        r = TryDecode(gray, "灰度增强");
-                        if (r != null) return r;
-
-                        // ---- 第 4 轮：灰度 + 二值化（Otus 阈值） ----
-                        using (var bw = Binarize(gray))
-                        {
-                            r = TryDecode(bw, "二值化");
-                            if (r != null) return r;
-                        }
-                    }
-
-                    // ---- 第 5 轮：反转色（深色主题截图里的"反色二维码"） ----
-                    using (var inv = Invert(work))
-                    {
-                        r = TryDecode(inv, "反色");
-                        if (r != null) return r;
-                    }
-
-                    // ---- 第 6 轮：中央裁剪（码只占画面一小块） ----
-                    foreach (int keepPct in new[] { 80, 60, 40 })
-                    {
-                        using (var crop = CenterCrop(work, keepPct))
-                        {
-                            if (crop == null) continue;
-                            r = TryDecode(crop, "中央裁剪 " + keepPct + "%");
-                            if (r != null) return r;
-                        }
-                    }
                 }
 
                 return Fail("没识别到二维码。试试换一张更清晰、二维码更完整的图。");
@@ -192,24 +216,27 @@ namespace GeZi.Core.Support
         // ---------------- 内部实现 ----------------
 
         /// <summary>单次解码尝试；失败返回 null（不抛异常，避免噪声图打断整条链）。</summary>
-        private static Result TryDecode(Bitmap bmp, string attempt)
+        private static Result TryDecode(Pixels px, string attempt)
         {
             try
             {
-                var reader = new BarcodeReader
+                // RGBLuminanceSource 只吃字节数组 → 天然跨平台。
+                // 给它 BGRA 格式的原始数据，由 ZXing 自己算亮度。
+                var source = new RGBLuminanceSource(
+                    px.Data, px.Width, px.Height,
+                    RGBLuminanceSource.BitmapFormat.BGRA32);
+
+                var binarizer = new HybridBinarizer(source);
+                var bitmap = new BinaryBitmap(binarizer);
+
+                var reader = new MultiFormatReader();
+                var hints = new Dictionary<DecodeHintType, object>
                 {
-                    // 只认需要的码制：范围越窄，误识别概率越低、速度越快
-                    Options = new DecodingOptions
-                    {
-                        PossibleFormats = Formats,
-                        // 二维码在照片里常有倾斜；开这两项让定位图形更易被找到
-                        TryHarder = true,
-                        TryInverted = false,   // 反色我们自己单独做一轮（更可控）
-                    },
-                    AutoRotate = true,
+                    { DecodeHintType.POSSIBLE_FORMATS, Formats },
+                    { DecodeHintType.TRY_HARDER, true },
                 };
 
-                var res = reader.Decode(bmp);
+                var res = reader.decode(bitmap, hints);
                 if (res == null || string.IsNullOrEmpty(res.Text)) return null;
 
                 return new Result
@@ -227,153 +254,114 @@ namespace GeZi.Core.Support
         }
 
         /// <summary>
-        /// 归一化：超大图等比缩小（避免内存与耗时失控），并把像素格式统一成 32bppArgb，
-        /// 让后续所有变换都在同一种格式上跑（某些格式的 LockBits 会抛异常）。
+        /// 归一化：超大图等比缩小（避免内存与耗时失控）。
+        /// 格式已经统一是 BGRA，不需要再做像素格式转换。
         /// </summary>
-        private static Bitmap Normalize(Bitmap src)
+        private static Pixels Normalize(Pixels src)
         {
             int w = src.Width, h = src.Height;
 
-            // 图像太大 → 等比缩到 MaxSide 以内且总像素不超 MaxPixels
             double scale = 1.0;
             if (w > MaxSide || h > MaxSide)
                 scale = Math.Min((double)MaxSide / w, (double)MaxSide / h);
             if ((long)(w * scale) * (long)(h * scale) > MaxPixels)
                 scale = Math.Sqrt((double)MaxPixels / ((long)w * h));
 
-            Bitmap bmp = scale < 1.0
-                ? Resize(src, Math.Max(1, (int)(w * scale)), Math.Max(1, (int)(h * scale)))
-                : new Bitmap(src);
+            if (scale < 1.0)
+                return Resize(src, Math.Max(1, (int)(w * scale)), Math.Max(1, (int)(h * scale)));
 
-            // 统一格式
-            if (bmp.PixelFormat != PixelFormat.Format32bppArgb)
-            {
-                var converted = new Bitmap(bmp.Width, bmp.Height, PixelFormat.Format32bppArgb);
-                using (var g = Graphics.FromImage(converted))
-                {
-                    g.CompositingQuality = CompositingQuality.HighQuality;
-                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                    g.DrawImage(bmp, new Rectangle(0, 0, bmp.Width, bmp.Height));
-                }
-                bmp.Dispose();
-                bmp = converted;
-            }
-            return bmp;
+            return src.Clone();
         }
 
-        private static Bitmap Resize(Bitmap src, int w, int h)
+        /// <summary>双线性插值缩放（纯托管）。缩小与放大用同一套，质量足够 QR 识别。</summary>
+        private static Pixels Resize(Pixels src, int w, int h)
         {
-            var dst = new Bitmap(w, h, PixelFormat.Format32bppArgb);
-            using (var g = Graphics.FromImage(dst))
-            {
-                g.CompositingQuality = CompositingQuality.HighQuality;
-                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                // 放大时用 NearestNeighbor 对 QR 更友好（保持模块边界锐利），
-                // 但 ZXing 自带采样容错，这里统一用高质量插值，避免锯齿反而干扰定位。
-                g.DrawImage(src, new Rectangle(0, 0, w, h));
-            }
-            return dst;
-        }
+            if (w < 1) w = 1;
+            if (h < 1) h = 1;
 
-        /// <summary>转灰度；contrast=true 时把对比度拉开（用逐像素 lut 映射，快且无副作用）。</summary>
-        private static Bitmap ToGray(Bitmap src, bool contrast)
-        {
-            var dst = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppArgb);
-            using (var g = Graphics.FromImage(dst))
-            {
-                // 用 ColorMatrix 做灰度 + 对比度，比逐像素快得多
-                var cm = new ColorMatrix(new[]
-                {
-                    new[] { .299f, .299f, .299f, 0f, 0f },
-                    new[] { .587f, .587f, .587f, 0f, 0f },
-                    new[] { .114f, .114f, .114f, 0f, 0f },
-                    new[] { 0f,    0f,    0f,    1f, 0f },
-                    new[] { 0f,    0f,    0f,    0f, 1f },
-                });
+            var dst = new Pixels(w, h);
+            byte[] s = src.Data, d = dst.Data;
+            int sw = src.Width, sh = src.Height;
 
-                if (contrast)
+            double xRatio = (double)sw / w;
+            double yRatio = (double)sh / h;
+
+            for (int y = 0; y < h; y++)
+            {
+                double sy = (y + 0.5) * yRatio - 0.5;
+                int y0 = (int)Math.Floor(sy);
+                if (y0 < 0) y0 = 0;
+                if (y0 > sh - 1) y0 = sh - 1;
+                int y1 = Math.Min(y0 + 1, sh - 1);
+                double fy = sy - y0;
+                if (fy < 0) fy = 0;
+
+                int dRow = y * w * 4;
+                for (int x = 0; x < w; x++)
                 {
-                    // 围绕 0.5 提升对比度：1.6 倍是实测对扫描件/截图较稳的值
-                    const float c = 1.6f, t = (1f - c) / 2f;
-                    var boost = new ColorMatrix(new[]
+                    double sx = (x + 0.5) * xRatio - 0.5;
+                    int x0 = (int)Math.Floor(sx);
+                    if (x0 < 0) x0 = 0;
+                    if (x0 > sw - 1) x0 = sw - 1;
+                    int x1 = Math.Min(x0 + 1, sw - 1);
+                    double fx = sx - x0;
+                    if (fx < 0) fx = 0;
+
+                    int i00 = (y0 * sw + x0) * 4;
+                    int i10 = (y0 * sw + x1) * 4;
+                    int i01 = (y1 * sw + x0) * 4;
+                    int i11 = (y1 * sw + x1) * 4;
+
+                    for (int c = 0; c < 4; c++)
                     {
-                        new[] { c, 0f, 0f, 0f, 0f },
-                        new[] { 0f, c, 0f, 0f, 0f },
-                        new[] { 0f, 0f, c, 0f, 0f },
-                        new[] { 0f, 0f, 0f, 1f, 0f },
-                        new[] { t, t, t, 0f, 1f },
-                    });
-                    cm = Multiply(boost, cm);
-                }
-
-                using (var ia = new ImageAttributes())
-                {
-                    ia.SetColorMatrix(cm);
-                    g.DrawImage(src, new Rectangle(0, 0, src.Width, src.Height),
-                        0, 0, src.Width, src.Height, GraphicsUnit.Pixel, ia);
+                        double top = s[i00 + c] * (1 - fx) + s[i10 + c] * fx;
+                        double bottom = s[i01 + c] * (1 - fx) + s[i11 + c] * fx;
+                        d[dRow + x * 4 + c] = (byte)Math.Round(top * (1 - fy) + bottom * fy);
+                    }
                 }
             }
             return dst;
         }
 
-        /// <summary>矩阵相乘（先应用 a 再应用 b 的合成；GDI+ 的约定：结果 = a × b）。</summary>
-        private static ColorMatrix Multiply(ColorMatrix a, ColorMatrix b)
+        /// <summary>转灰度；contrast=true 时把对比度拉开（围绕 0.5 提升 1.6 倍）。</summary>
+        private static Pixels ToGray(Pixels src, bool contrast)
         {
-            var r = new float[5][];
-            for (int i = 0; i < 5; i++) r[i] = new float[5];
-            for (int i = 0; i < 5; i++)
-                for (int j = 0; j < 5; j++)
-                {
-                    float s = 0f;
-                    for (int k = 0; k < 5; k++) s += a[i, k] * b[k, j];
-                    r[i][j] = s;
-                }
-            return new ColorMatrix(r);
+            var dst = new Pixels(src.Width, src.Height);
+            byte[] s = src.Data, d = dst.Data;
+
+            const float c = 1.6f, t = (1f - c) / 2f;
+
+            for (int i = 0; i < s.Length; i += 4)
+            {
+                // BT.601 亮度权重（与 GDI+ ColorMatrix 那套系数一致）
+                float lum = .299f * s[i + 2] + .587f * s[i + 1] + .114f * s[i];
+                if (contrast)
+                    lum = lum * c + t * 255f;
+
+                byte v = (byte)(lum < 0 ? 0 : lum > 255 ? 255 : lum);
+                d[i] = v; d[i + 1] = v; d[i + 2] = v; d[i + 3] = 255;
+            }
+            return dst;
         }
 
         /// <summary>Otsu 大津法自动阈值二值化（比固定阈值稳，能适应不同亮度）。</summary>
-        private static Bitmap Binarize(Bitmap gray)
+        private static Pixels Binarize(Pixels gray)
         {
             int w = gray.Width, h = gray.Height;
-            var dst = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+            byte[] s = gray.Data;
+            var dst = new Pixels(w, h);
+            byte[] d = dst.Data;
 
-            var rect = new Rectangle(0, 0, w, h);
-            var sd = gray.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-            var dd = dst.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+            // 灰度直方图（取 B 通道即可，前面已转灰度，三通道相等）
+            var hist = new int[256];
+            for (int i = 0; i < s.Length; i += 4) hist[s[i]]++;
 
-            try
+            int threshold = OtsuThreshold(hist, w * h);
+
+            for (int i = 0; i < s.Length; i += 4)
             {
-                int stride = sd.Stride;
-                byte[] sb = new byte[stride * h];
-                System.Runtime.InteropServices.Marshal.Copy(sd.Scan0, sb, 0, sb.Length);
-
-                // 灰度直方图（取 B 通道即可，前面已转灰度，三通道相等）
-                var hist = new int[256];
-                for (int y = 0; y < h; y++)
-                {
-                    int row = y * stride;
-                    for (int x = 0; x < w; x++) hist[sb[row + x * 4]]++;
-                }
-
-                int threshold = OtsuThreshold(hist, w * h);
-
-                byte[] db = new byte[stride * h];
-                for (int y = 0; y < h; y++)
-                {
-                    int row = y * stride;
-                    for (int x = 0; x < w; x++)
-                    {
-                        byte v = sb[row + x * 4] >= threshold ? (byte)255 : (byte)0;
-                        int o = row + x * 4;
-                        db[o] = v; db[o + 1] = v; db[o + 2] = v; db[o + 3] = 255;
-                    }
-                }
-                System.Runtime.InteropServices.Marshal.Copy(db, 0, dd.Scan0, db.Length);
-            }
-            finally
-            {
-                gray.UnlockBits(sd);
-                dst.UnlockBits(dd);
+                byte v = s[i] >= threshold ? (byte)255 : (byte)0;
+                d[i] = v; d[i + 1] = v; d[i + 2] = v; d[i + 3] = 255;
             }
             return dst;
         }
@@ -402,44 +390,38 @@ namespace GeZi.Core.Support
         }
 
         /// <summary>RGB 反转（处理"反色二维码"）。</summary>
-        private static Bitmap Invert(Bitmap src)
+        private static Pixels Invert(Pixels src)
         {
-            var dst = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppArgb);
-            using (var g = Graphics.FromImage(dst))
+            var dst = new Pixels(src.Width, src.Height);
+            byte[] s = src.Data, d = dst.Data;
+            for (int i = 0; i < s.Length; i += 4)
             {
-                var cm = new ColorMatrix(new[]
-                {
-                    new[] { -1f,  0f,  0f, 0f, 0f },
-                    new[] {  0f, -1f,  0f, 0f, 0f },
-                    new[] {  0f,  0f, -1f, 0f, 0f },
-                    new[] {  0f,  0f,  0f, 1f, 0f },
-                    new[] {  1f,  1f,  1f, 0f, 1f },
-                });
-                using (var ia = new ImageAttributes())
-                {
-                    ia.SetColorMatrix(cm);
-                    g.DrawImage(src, new Rectangle(0, 0, src.Width, src.Height),
-                        0, 0, src.Width, src.Height, GraphicsUnit.Pixel, ia);
-                }
+                d[i] = (byte)(255 - s[i]);
+                d[i + 1] = (byte)(255 - s[i + 1]);
+                d[i + 2] = (byte)(255 - s[i + 2]);
+                d[i + 3] = 255;
             }
             return dst;
         }
 
         /// <summary>按百分比取中央区域（<paramref name="keepPct"/> = 保留边长百分比）。</summary>
-        private static Bitmap CenterCrop(Bitmap src, int keepPct)
+        private static Pixels CenterCrop(Pixels src, int keepPct)
         {
             int cw = src.Width * keepPct / 100;
             int ch = src.Height * keepPct / 100;
             if (cw < 32 || ch < 32) return null;             // 太小没意义
             if (cw >= src.Width && ch >= src.Height) return null;
 
-            int x = (src.Width - cw) / 2;
-            int y = (src.Height - ch) / 2;
-            var dst = new Bitmap(cw, ch, PixelFormat.Format32bppArgb);
-            using (var g = Graphics.FromImage(dst))
+            int x0 = (src.Width - cw) / 2;
+            int y0 = (src.Height - ch) / 2;
+
+            var dst = new Pixels(cw, ch);
+            byte[] s = src.Data, d = dst.Data;
+            for (int y = 0; y < ch; y++)
             {
-                g.DrawImage(src, new Rectangle(0, 0, cw, ch),
-                    new Rectangle(x, y, cw, ch), GraphicsUnit.Pixel);
+                int sRow = ((y0 + y) * src.Width + x0) * 4;
+                int dRow = y * cw * 4;
+                Buffer.BlockCopy(s, sRow, d, dRow, cw * 4);
             }
             return dst;
         }

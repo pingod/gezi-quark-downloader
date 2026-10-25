@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Linux / macOS 原生图形界面（Avalonia 12）。
+       与 Windows 的 WPF 版（src/GeZi）并列存在，共用同一份 GeZi.Core：
+         src/GeZi            → WPF，仅 Windows，仍是 Windows 的正式产物
+         src/GeZi.Avalonia   → Avalonia，Linux / macOS 原生（本项目）
+       两者互不引用，Core 的双目标（net48 / net8.0）让它们能吃到同一套下载与 API 逻辑。 -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>GeZi.Avalonia</AssemblyName>
+    <RootNamespace>GeZi.Avalonia</RootNamespace>
+    <Version>2.3.1</Version>
+    <!-- Avalonia 的绑定默认走反射；这里显式关掉编译期绑定，避免 x:DataType 缺失时报错 -->
+    <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 平台检查：核心里有 Windows/macOS/Linux 分支，跨平台调用是预期行为 -->
+    <NoWarn>CA1416</NoWarn>
+    <!-- 二维码渲染直接写 WriteableBitmap 的像素指针（见 QrBitmap.cs） -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+    <!-- Wayland：Linux 上直接走原生协议，而不是退回 XWayland 再套一层 X11 -->
+    <PackageReference Include="Avalonia.Wayland" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Skia" Version="12.1.4" />
+    <PackageReference Include="Avalonia.HarfBuzz" Version="12.1.4" />
+    <!-- 文件选择框（"选择保存目录"）用 Avalonia 自带的 StorageProvider，不需要额外包 -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GeZi.Core\GeZi.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 应用图标等内嵌资源 -->
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
+
+</Project>

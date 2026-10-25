@@ -1,0 +1,57 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="GeZi.Avalonia.QrLoginWindow"
+        Title="扫码登录夸克"
+        Width="420" Height="540"
+        WindowStartupLocation="CenterOwner"
+        Background="#1B1D21"
+        CanResize="False">
+  <Window.Styles>
+    <Style Selector="TextBlock"><Setter Property="Foreground" Value="#E8EAED" /></Style>
+    <Style Selector="TextBlock.dim"><Setter Property="Foreground" Value="#98A0AA" /></Style>
+    <Style Selector="Button">
+      <Setter Property="Background" Value="#2A2E35" />
+      <Setter Property="Foreground" Value="#E8EAED" />
+      <Setter Property="BorderBrush" Value="#3C4148" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="14,8" />
+    </Style>
+    <Style Selector="Button.accent">
+      <Setter Property="Background" Value="#2E7CF6" />
+      <Setter Property="BorderBrush" Value="#2E7CF6" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,*,Auto,Auto" Margin="24">
+    <TextBlock Grid.Row="0" Text="用夸克 App 扫码登录" FontSize="17" FontWeight="SemiBold"
+               HorizontalAlignment="Center" />
+
+    <!-- 二维码区 -->
+    <Border Grid.Row="1" Background="White" CornerRadius="10"
+            Width="280" Height="280" Margin="0,20"
+            HorizontalAlignment="Center" VerticalAlignment="Center">
+      <Grid>
+        <Image x:Name="QrImage" Stretch="Uniform" Margin="12" />
+        <TextBlock x:Name="QrPlaceholder" Text="正在获取二维码…"
+                   Foreground="#666" HorizontalAlignment="Center" VerticalAlignment="Center" />
+      </Grid>
+    </Border>
+
+    <!-- 状态 -->
+    <StackPanel Grid.Row="2" Spacing="8">
+      <TextBlock x:Name="StateText" Text="准备中…" HorizontalAlignment="Center" FontSize="14" />
+      <TextBlock x:Name="HintText" Classes="dim" FontSize="12" TextWrapping="Wrap"
+                 HorizontalAlignment="Center" TextAlignment="Center"
+                 Text="打开手机夸克 App → 右上角扫一扫 → 确认登录" />
+    </StackPanel>
+
+    <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8"
+                HorizontalAlignment="Center" Margin="0,16,0,0">
+      <Button x:Name="RefreshBtn" Content="刷新二维码" Click="OnRefreshClick" />
+      <Button Content="改用 Cookie 登录" Click="OnUseCookieClick" />
+      <Button Content="取消" Click="OnCancelClick" />
+    </StackPanel>
+  </Grid>
+</Window>

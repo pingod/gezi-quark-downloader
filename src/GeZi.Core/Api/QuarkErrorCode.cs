@@ -45,5 +45,35 @@ namespace GeZi.Core.Api
         /// 这个值是实测确认过的 —— 现有轮询逻辑一直以它作成功判据。
         /// </summary>
         public const long TaskStatusSuccess = 2;
+
+        // ================= 分享取链的错误码分流（2026-10 对齐 wenxi）=================
+        //
+        // 这组常量与上方几个**语义不同**，务必看清：
+        //   上方 23017/23018 是「转存时空间不足」；
+        //   这里 23018 出现在**取链**接口里则表示「需登录/受限」。
+        //   同一个数字在不同接口上含义不同，这是夸克接口的历史遗留。
+        //
+        // 分流规则（照抄 wenxi 的 cookie_cloud.dart:1220-1226，实测验证过）：
+        //   HTTP 404/405      → 接口不存在，可刷新凭证重试（不是"彻底没救"）
+        //   HTTP 401/403      → 无权限，直链永远拿不到 → 必须降级到转存
+        //   code 14001/41020  → 分享下载凭证过期 → 可刷新 stoken 重试
+        //   code 23018/31001  → 需要登录 / 受限 → 必须降级到转存
+        //
+        // 为什么必须区分「可重试」和「降级」：
+        //   把 31001 当成普通错误直接报错，用户看到的是"取链失败"，
+        //   但实际正确处理是**自动改走转存**——文件能下，只是路径不同。
+        //   不做分流就等于把一个能成功的场景变成失败。
+
+        /// <summary>分享下载凭证已失效（可刷新 stoken 后重试）。</summary>
+        public const long ShareDownloadCredentialExpired = 14001;
+
+        /// <summary>同上，另一个取值。</summary>
+        public const long ShareDownloadCredentialExpiredAlt = 41020;
+
+        /// <summary>需要登录 / 受限（应降级到转存路径，而不是报错）。</summary>
+        public const long ShareDownloadNeedLogin = 23018;
+
+        /// <summary>未登录（夸克/UC 通用），同样应降级。</summary>
+        public const long NotLoggedIn = 31001;
     }
 }

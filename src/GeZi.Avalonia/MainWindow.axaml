@@ -1,0 +1,233 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="GeZi.Avalonia.MainWindow"
+        Title="鸽子下载"
+        Width="1080" Height="720"
+        MinWidth="820" MinHeight="560"
+        WindowStartupLocation="CenterScreen"
+        Background="#1B1D21">
+  <Window.Styles>
+    <!-- 统一的深色卡片观感。Avalonia 的控件模板和 WPF 不同，
+         这里直接用属性覆盖 + 少量样式，比搬 1900 行 WPF Styles.xaml 现实得多。 -->
+    <Style Selector="Button">
+      <Setter Property="Background" Value="#2A2E35" />
+      <Setter Property="Foreground" Value="#E8EAED" />
+      <Setter Property="BorderBrush" Value="#3C4148" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="14,8" />
+    </Style>
+    <Style Selector="Button:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#343941" />
+    </Style>
+    <Style Selector="Button.accent">
+      <Setter Property="Background" Value="#2E7CF6" />
+      <Setter Property="BorderBrush" Value="#2E7CF6" />
+      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.accent:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#4A8FF8" />
+    </Style>
+    <Style Selector="TextBox">
+      <Setter Property="Background" Value="#22262B" />
+      <Setter Property="Foreground" Value="#E8EAED" />
+      <Setter Property="BorderBrush" Value="#3C4148" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="10,8" />
+    </Style>
+    <Style Selector="TextBlock">
+      <Setter Property="Foreground" Value="#E8EAED" />
+    </Style>
+    <Style Selector="TextBlock.dim">
+      <Setter Property="Foreground" Value="#98A0AA" />
+    </Style>
+    <Style Selector="TextBlock.title">
+      <Setter Property="FontSize" Value="18" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="ProgressBar">
+      <Setter Property="Height" Value="8" />
+      <Setter Property="Foreground" Value="#2E7CF6" />
+      <Setter Property="Background" Value="#2A2E35" />
+      <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="ListBox">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="16">
+    <!-- ======== 顶部：标题 + 账号状态 ======== -->
+    <!-- 两行布局：第一行标题+账号状态，第二行操作按钮。
+         为什么不用单行 + WrapPanel：外层是 4 行 Grid，第 0 行是 Auto 高度，
+         WrapPanel 在里面拿不到"可用宽度"的约束，实际不会换行 ——
+         实测按钮被挤出屏幕右边缘（只剩半个「账」字），点不到。
+         显式分两行是唯一在任何宽度下都正确的做法。 -->
+    <Grid Grid.Row="0" RowDefinitions="Auto,Auto" Margin="0,0,0,12">
+      <!-- 第一行：品牌 + 账号状态 -->
+      <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,8">
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10">
+          <TextBlock Text="🕊" FontSize="22" VerticalAlignment="Center" />
+          <TextBlock Text="鸽子下载" Classes="title" VerticalAlignment="Center" />
+          <TextBlock Text="Linux 原生版" Classes="dim" VerticalAlignment="Center" Margin="4,2,0,0" />
+        </StackPanel>
+
+        <TextBlock x:Name="AccountText" Grid.Column="2" Text="未登录" Classes="dim"
+                   VerticalAlignment="Center" MaxWidth="180"
+                   TextTrimming="CharacterEllipsis" HorizontalAlignment="Right" />
+      </Grid>
+
+      <!-- 第二行：操作按钮（横向可滚动，窄窗口下仍能点到） -->
+      <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto"
+                    VerticalScrollBarVisibility="Disabled">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <Button x:Name="MyDiskBtn" Content="我的网盘" Click="OnMyDiskClick" />
+          <Button x:Name="AccountsBtn" Content="账号" Click="OnAccountsClick" />
+          <Button x:Name="SettingsBtn" Content="设置" Click="OnSettingsClick" />
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+
+    <!-- ======== 链接输入区 ======== -->
+    <Border Grid.Row="1" Background="#22262B" CornerRadius="8" Padding="12" Margin="0,0,0,12">
+      <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto">
+        <TextBox x:Name="UrlBox" Grid.Row="0" Grid.Column="0"
+                 PlaceholderText="粘贴夸克分享链接，或整段分享文案（含提取码）" />
+        <Button x:Name="ParseBtn" Grid.Row="0" Grid.Column="1"
+                Content="解析" Classes="accent" Margin="8,0,0,0" Click="OnParseClick" />
+
+        <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                    Orientation="Horizontal" Spacing="12" Margin="0,10,0,0">
+          <TextBlock Text="保存到:" Classes="dim" VerticalAlignment="Center" />
+          <TextBlock x:Name="OutDirText" Text="~/Downloads" Classes="dim"
+                     VerticalAlignment="Center" MaxWidth="520" TextTrimming="CharacterEllipsis" />
+          <Button Content="更改" Click="OnChooseDirClick" Padding="10,4" />
+          <TextBlock x:Name="StatusText" Text="" Classes="dim" VerticalAlignment="Center" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- ======== 中部：分享文件列表 / 下载任务列表 ======== -->
+    <TabControl x:Name="MainTabs" Grid.Row="2" Background="Transparent">
+      <!-- 分享文件 -->
+      <TabItem Header="分享文件">
+        <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="0,10,0,0">
+          <WrapPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+            <Button x:Name="GoUpBtn" Content="← 上一级" Click="OnGoUpClick"
+                    Padding="10,4" Margin="0,0,8,0" IsVisible="False" />
+            <Button Content="全选" Click="OnSelectAllClick" Padding="10,4" Margin="0,0,8,0" />
+            <Button Content="全不选" Click="OnSelectNoneClick" Padding="10,4" Margin="0,0,8,0" />
+            <TextBlock x:Name="FileSummary" Text="" Classes="dim" VerticalAlignment="Center"
+                       Margin="0,0,16,0" />
+
+            <!-- 文件管理（仅个人网盘模式可用） -->
+            <Button x:Name="NewFolderBtn" Content="新建文件夹" Padding="10,4" Margin="0,0,6,0"
+                    IsVisible="False" Click="OnNewFolderClick" />
+            <Button x:Name="RenameBtn" Content="重命名" Padding="10,4" Margin="0,0,6,0"
+                    IsVisible="False" Click="OnRenameClick" />
+            <Button x:Name="MoveBtn" Content="移动" Padding="10,4" Margin="0,0,6,0"
+                    IsVisible="False" Click="OnMoveClick" />
+            <Button x:Name="DeleteBtn" Content="删除" Padding="10,4" Margin="0,0,6,0"
+                    IsVisible="False" Click="OnDeleteClick" />
+            <Button x:Name="ShareBtn" Content="创建分享" Padding="10,4" Margin="0,0,6,0"
+                    IsVisible="False" Click="OnCreateShareClick" />
+            <Button x:Name="UploadBtn" Content="上传文件" Padding="10,4"
+                    IsVisible="False" Click="OnUploadClick" />
+          </WrapPanel>
+
+          <!-- 当前所在目录（在分享的文件夹内部时才显示） -->
+          <Border x:Name="DirBar" Grid.Row="1" IsVisible="False"
+                  Background="#1E2227" CornerRadius="6" Padding="10,6" Margin="0,0,0,8"
+                  VerticalAlignment="Top" HorizontalAlignment="Left">
+            <TextBlock x:Name="DirPathText" Text="" Classes="dim" FontSize="12" />
+          </Border>
+
+          <ListBox x:Name="FileList" Grid.Row="2">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto" Margin="0,4"
+                      DoubleTapped="OnFileDoubleTapped" Background="Transparent">
+                  <CheckBox Grid.Column="0" IsChecked="{Binding Selected, Mode=TwoWay}"
+                            VerticalAlignment="Center" Click="OnFileCheckChanged"
+                            IsVisible="{Binding CanSelect}" />
+                  <TextBlock Grid.Column="1" Text="{Binding DisplayName}" VerticalAlignment="Center"
+                             Margin="6,0,12,0" TextTrimming="CharacterEllipsis"
+                             ToolTip.Tip="{Binding Hint}" />
+                  <TextBlock Grid.Column="2" Text="{Binding Kind}" Classes="dim"
+                             VerticalAlignment="Center" Margin="0,0,12,0" />
+                  <TextBlock Grid.Column="3" Text="{Binding SizeText}" Classes="dim"
+                             VerticalAlignment="Center" Width="90" TextAlignment="Right" />
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+
+          <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8" Margin="0,10,0,0">
+            <Button x:Name="DownloadBtn" Content="下载选中文件" Classes="accent"
+                    IsEnabled="False" Click="OnDownloadClick" />
+            <TextBlock x:Name="FileHint" Text="先粘贴分享链接并解析" Classes="dim"
+                       VerticalAlignment="Center" />
+          </StackPanel>
+        </Grid>
+      </TabItem>
+
+      <!-- 下载任务 -->
+      <TabItem Header="下载任务">
+        <Grid RowDefinitions="*,Auto" Margin="0,10,0,0">
+          <ListBox x:Name="TaskList" Grid.Row="0">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <Border Background="#22262B" CornerRadius="8" Padding="12" Margin="0,4">
+                  <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto">
+                    <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="10">
+                      <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"
+                                 VerticalAlignment="Center" MaxWidth="480" />
+                      <TextBlock Text="{Binding State}" Classes="dim" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                      <TextBlock Text="{Binding ProgressText}" VerticalAlignment="Center"
+                                 Width="60" TextAlignment="Right" />
+                      <Button Content="暂停" Padding="10,4" Click="OnPauseTaskClick"
+                              IsEnabled="{Binding CanPause}" />
+                      <Button Content="继续" Padding="10,4" Click="OnResumeTaskClick"
+                              IsEnabled="{Binding CanResume}" />
+                      <Button Content="取消" Padding="10,4" Click="OnCancelTaskClick" />
+                      <Button Content="边下边播" Padding="10,4" Click="OnPlayPartiallyClick"
+                              ToolTip.Tip="用外部播放器打开已下载的部分" />
+                      <Button Content="打开目录" Padding="10,4" Click="OnOpenFolderClick" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,8,0,0">
+                      <ProgressBar Value="{Binding Percent}" Maximum="100" />
+                      <Grid ColumnDefinitions="*,Auto" Margin="0,6,0,0">
+                        <TextBlock Grid.Column="0" Text="{Binding SizeText}" Classes="dim" FontSize="12" />
+                        <TextBlock Grid.Column="1" Text="{Binding SpeedText}" Classes="dim" FontSize="12" />
+                      </Grid>
+                      <TextBlock Text="{Binding Error}" Foreground="#FF8A80" FontSize="12"
+                                 IsVisible="{Binding HasError}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                    </StackPanel>
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+
+          <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,10,0,0">
+            <Button Content="清空已完成" Click="OnClearDoneClick" Padding="10,4" />
+            <TextBlock x:Name="TaskSummary" Text="" Classes="dim" VerticalAlignment="Center" />
+          </StackPanel>
+        </Grid>
+      </TabItem>
+    </TabControl>
+
+    <!-- ======== 底部：日志 ======== -->
+    <Border Grid.Row="3" Background="#191B1F" CornerRadius="6" Padding="10" Margin="0,12,0,0"
+            MaxHeight="130">
+      <ScrollViewer>
+        <TextBlock x:Name="LogText" Text="" Classes="dim" FontSize="12" TextWrapping="Wrap" />
+      </ScrollViewer>
+    </Border>
+  </Grid>
+</Window>
