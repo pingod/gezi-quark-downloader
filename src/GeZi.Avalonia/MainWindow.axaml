@@ -1,4 +1,4 @@
-<Window xmlns="https://github.com/avaloniaui"
+﻿<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="GeZi.Avalonia.MainWindow"
         Title="鸽子下载"
@@ -193,9 +193,13 @@
                               IsEnabled="{Binding CanPause}" />
                       <Button Content="继续" Padding="10,4" Click="OnResumeTaskClick"
                               IsEnabled="{Binding CanResume}" />
-                      <Button Content="取消" Padding="10,4" Click="OnCancelTaskClick" />
+                      <Button Content="取消" Padding="10,4" Click="OnCancelTaskClick"
+                              IsEnabled="{Binding CanCancel}" />
+                      <Button Content="删除" Padding="10,4" Click="OnRemoveTaskClick"
+                              IsEnabled="{Binding CanRemove}"
+                              ToolTip.Tip="从任务列表移除（失败/已取消/已完成的任务）" />
                       <Button Content="边下边播" Padding="10,4" Click="OnPlayPartiallyClick"
-                              ToolTip.Tip="用外部播放器打开已下载的部分" />
+                              IsEnabled="{Binding CanPlayPartial}" />
                       <Button Content="打开目录" Padding="10,4" Click="OnOpenFolderClick" />
                     </StackPanel>
 

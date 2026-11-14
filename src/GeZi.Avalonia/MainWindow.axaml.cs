@@ -498,8 +498,8 @@ namespace GeZi.Avalonia
         /// <summary>按"有没有可下载的文件被选中"更新下载按钮状态。</summary>
         private void UpdateDownloadButton()
         {
-            int selected = _files.Count(f => f.Selected && !f.Entry.IsDir);
-            _downloadBtn.IsEnabled = selected > 0;
+            // 勾选文件夹也算「有选中」—— 下载时会递归展开成具体文件。
+            _downloadBtn.IsEnabled = _files.Any(f => f.Selected);
         }
 
         /// <summary>双击文件夹 → 进入。</summary>
@@ -507,6 +507,11 @@ namespace GeZi.Avalonia
         {
             var row = (sender as Control)?.DataContext as FileRow;
             if (row == null || !row.Entry.IsDir) return;
+
+            // 双击落在勾选框上时不要进目录：用户是在连点勾选框（或双击切换勾选），
+            // 那不是"我要进去"的意图。点一次复选框后 e.Handled 已置位，
+            // 但双击的第二下可能仍然冒泡上来，所以这里按原始源再挡一次。
+            if (e.Source is CheckBox) return;
 
             await EnterDirectoryAsync(row);
         }
@@ -581,8 +586,11 @@ namespace GeZi.Avalonia
         private void UpdateFileSummary()
         {
             int n = _files.Count;
-            int selected = _files.Count(f => f.Selected && !f.Entry.IsDir);
-            long total = _files.Where(f => f.Selected && !f.Entry.IsDir).Sum(f => f.Size);
+            // 文件夹现在也能勾选，所以「已选」要把它算进去；
+            // 大小只累加已知的（文件夹要等展开后才有 DirSize）。
+            int selected = _files.Count(f => f.Selected);
+            long total = _files.Where(f => f.Selected)
+                               .Sum(f => f.Entry.IsDir ? f.DirSize : f.Size);
             _fileSummary.Text = string.Format("共 {0} 项 / 已选 {1} 项，合计 {2}",
                 n, selected, FileRow.FormatSize(total));
         }
@@ -591,19 +599,23 @@ namespace GeZi.Avalonia
         private void OnFileCheckChanged(object sender, RoutedEventArgs e)
         {
             UpdateFileSummary();
-            _downloadBtn.IsEnabled = _files.Any(f => f.Selected && !f.Entry.IsDir);
+            UpdateDownloadButton();
         }
 
         private void OnSelectAllClick(object sender, RoutedEventArgs e)
         {
-            foreach (var f in _files.Where(x => !x.Entry.IsDir)) f.Selected = true;
+            // 文件夹也一起选上：用户点「全选」就是想要当前目录下的全部内容，
+            // 文件夹里的文件由下载时递归展开。
+            foreach (var f in _files) f.Selected = true;
             UpdateFileSummary();
+            UpdateDownloadButton();
         }
 
         private void OnSelectNoneClick(object sender, RoutedEventArgs e)
         {
             foreach (var f in _files) f.Selected = false;
             UpdateFileSummary();
+            UpdateDownloadButton();
         }
 
         private async void OnChooseDirClick(object sender, RoutedEventArgs e)
@@ -637,10 +649,34 @@ namespace GeZi.Avalonia
 
         private async void OnDownloadClick(object sender, RoutedEventArgs e)
         {
-            var picked = _files.Where(f => f.Selected && !f.Entry.IsDir).ToList();
+            // 勾选可能是文件夹 → 必须先递归展开成具体文件。
+            // 原来这里直接 `!f.Entry.IsDir` 过滤掉文件夹，而文件夹又没有复选框，
+            // 所以「下载整个文件夹」这个最常见的需求根本无法表达。
+            var selectedRows = _files.Where(f => f.Selected).ToList();
+            if (selectedRows.Count == 0)
+            {
+                _statusText.Text = "请先勾选要下载的文件或文件夹";
+                return;
+            }
+
+            List<FileRow> picked;
+            try
+            {
+                _statusText.Text = "正在展开所选文件夹…";
+                _downloadBtn.IsEnabled = false;
+                picked = await ExpandSelectionAsync(selectedRows);
+            }
+            catch (Exception ex)
+            {
+                _statusText.Text = "展开文件夹失败：" + ex.Message;
+                Log("展开文件夹失败：" + ex.Message);
+                _downloadBtn.IsEnabled = true;
+                return;
+            }
+
             if (picked.Count == 0)
             {
-                _statusText.Text = "请先勾选要下载的文件";
+                _statusText.Text = "所选文件夹里没有文件";
                 return;
             }
 
@@ -663,9 +699,13 @@ namespace GeZi.Avalonia
                 // 按"分享名/子目录…"保存，而不是全部平铺到一个目录：
                 // ① 不同子目录下的同名文件不会互相覆盖；
                 // ② 用户下载整个分享时能保留原有结构（分卷压缩包尤其需要）。
+                // 当前浏览位置 + 该文件在展开时记录的子路径（勾选文件夹下载才有）
                 string relDir = string.Join(Path.DirectorySeparatorChar,
                     _dirStack.Select(d => PathUtil.SanitizeFileName(d.Name))
                              .Concat(new[] { PathUtil.SanitizeFileName(_curDirName) })
+                             .Concat(string.IsNullOrEmpty(row.RelDir)
+                                     ? Array.Empty<string>()
+                                     : new[] { row.RelDir })
                              .Where(n => !string.IsNullOrEmpty(n) && n != "分享根目录"));
 
                 string destDir = string.IsNullOrEmpty(relDir)
@@ -716,6 +756,121 @@ namespace GeZi.Avalonia
             if (tabs != null) tabs.SelectedIndex = 1;
 
             await RunJobsAsync(client, jobs, rows);
+        }
+
+        /// <summary>
+        /// 把「勾选的条目」展开成「具体文件」列表。
+        /// <para>
+        /// 勾选里可能有文件夹 —— 它们需要递归下钻，把里面的文件全部取出来，
+        /// 并记下各自相对当前目录的子路径（<see cref="FileRow.RelDir"/>），
+        /// 这样落盘时能保留原目录结构。
+        /// </para>
+        /// <para>
+        /// 两条通道都要支持：多网盘（<c>_provider</c>）与夸克分享老通道（<c>_client</c>）。
+        /// 夸克老通道走分页接口（<c>ShareDetailPageAsync</c>），
+        /// **必须翻页到底**：一个目录可能有几千个文件，只取第一页会静默少下。
+        /// </para>
+        /// </summary>
+        private async Task<List<FileRow>> ExpandSelectionAsync(List<FileRow> selected)
+        {
+            var result = new List<FileRow>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);   // 防同一 fid 重复入队
+            int scanned = 0;
+
+            foreach (var row in selected)
+            {
+                if (row == null) continue;
+
+                if (!row.Entry.IsDir)
+                {
+                    if (seen.Add(row.Entry.Fid)) result.Add(row);
+                    continue;
+                }
+
+                // 文件夹：递归下钻。累加器按引用传进去 —— 本地函数不能
+                // 直接捕获「foreach 循环体内的局部变量」以外的写入（这里需要跨递归累加）。
+                long dirBytes = 0;
+                await WalkDirAsync(row, "", 0, b => dirBytes += b);
+
+                // 回填真实大小，界面上「合计」才有意义
+                row.DirSize = dirBytes;
+            }
+
+            UpdateFileSummary();
+            return result;
+
+            async Task WalkDirAsync(FileRow dirRow, string relPrefix, int depth, Action<long> addBytes)
+            {
+                // 深度上限：正常分享不会这么深，纯粹防病态结构把栈/请求打爆
+                if (depth >= 32) return;
+
+                List<FileRow> children;
+                try
+                {
+                    children = await ListDirForExpandAsync(dirRow.Entry.Fid);
+                }
+                catch (Exception ex)
+                {
+                    // 单个目录失败不应该让整批下载失败 —— 但要明确告诉用户少了东西
+                    Log("读取子目录失败：" + dirRow.Name + " — " + ex.Message);
+                    return;
+                }
+
+                foreach (var child in children)
+                {
+                    scanned++;
+                    if ((scanned & 0x3F) == 0)
+                        _statusText.Text = string.Format("正在展开… 已扫描 {0} 个文件", scanned);
+
+                    string childRel = string.IsNullOrEmpty(relPrefix)
+                        ? PathUtil.SanitizeFileName(child.Name)
+                        : Path.Combine(relPrefix, PathUtil.SanitizeFileName(child.Name));
+
+                    if (child.Entry.IsDir)
+                    {
+                        await WalkDirAsync(child, childRel, depth + 1, addBytes);
+                    }
+                    else
+                    {
+                        child.RelDir = relPrefix;   // 文件落在「父目录」下
+                        if (seen.Add(child.Entry.Fid))
+                        {
+                            result.Add(child);
+                            addBytes(child.Size);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 列出某个目录下的**全部**条目（含翻页），供递归展开使用。
+        /// </summary>
+        private async Task<List<FileRow>> ListDirForExpandAsync(string dirFid)
+        {
+            var list = new List<FileRow>();
+
+            if (_provider != null && _cloudSession != null)
+            {
+                var cred = BuildCredential(_cloudSession.Platform);
+                var items = await _provider.ListAsync(_cloudSession, dirFid, cred);
+                foreach (var it in items)
+                    list.Add(new FileRow(it, _cloudSession.Meta("passcode")));
+                return list;
+            }
+
+            var client = _client ?? new QuarkClient("");
+            for (int page = 1; page <= 200; page++)   // 200 页 × 每页 50 ≈ 1 万条，足够
+            {
+                var p = await client.ShareDetailPageAsync(_pwdId, _stoken, dirFid, page);
+                if (p?.Items == null || p.Items.Count == 0) break;
+
+                foreach (var it in p.Items)
+                    list.Add(new FileRow(it, _pwdId, _stoken, _passcode));
+
+                if (!p.HasMore) break;
+            }
+            return list;
         }
 
         /// <summary>
@@ -844,8 +999,8 @@ namespace GeZi.Avalonia
                     }
                     catch (Exception tex)
                     {
-                        tr.State = "转存失败";
-                        tr.Error = tex.Message;
+                        tr.State = "失败";
+                        tr.Error = "自动转存失败：" + tex.Message;
                         Log("自动转存失败：" + job.Name + " — " + tex.Message);
                     }
 
@@ -853,8 +1008,8 @@ namespace GeZi.Avalonia
                 }
                 catch (QuarkShareCredentialExpiredException ex)
                 {
-                    tr.State = "需重试";
-                    tr.Error = ex.Message;
+                    tr.State = "失败";
+                    tr.Error = ex.Message + "（需重新解析分享后重试）";
                     Log("凭证过期：" + job.Name + " — 请重新点「解析」刷新分享凭证后重试");
                 }
                 catch (Exception ex)
@@ -1095,14 +1250,47 @@ namespace GeZi.Avalonia
 
         private void OnCancelTaskClick(object sender, RoutedEventArgs e)
         {
-            if (SenderTask(sender) is TaskRow tr)
+            if (!(SenderTask(sender) is TaskRow tr)) return;
+
+            // 已结束的任务不该再发取消信号（按钮本身也会是灰的，这里兜一层）
+            if (!tr.CanCancel) return;
+
+            tr.UserPaused = false;
+            tr.Job.CancelJob();
+
+            // ⚠️ 不要在这里直接把状态写成"已取消"。
+            // 取消只是发信号，worker 可能正卡在一次 ReadAsync 里，要等那次读返回
+            // 才会真正退出。立即标"已取消"会让「删除」按钮提前变可用，
+            // 而此刻后台仍在写盘 —— 用户删掉任务后文件还在长，很难理解。
+            // 真正的终态由调度器回调（JobState.Cancelled）写入。
+            tr.State = "正在取消";
+            Log("正在取消：" + tr.Name);
+            UpdateTaskSummary();
+        }
+
+        /// <summary>
+        /// 从任务列表移除一条已结束的任务。
+        /// <para>
+        /// 只删界面条目，**不删已下载的文件** —— 用户点「删除」是想清掉列表里
+        /// 那条失败/取消的记录，不是想丢文件。真要删文件请去「打开目录」。
+        /// </para>
+        /// </summary>
+        private void OnRemoveTaskClick(object sender, RoutedEventArgs e)
+        {
+            if (!(SenderTask(sender) is TaskRow tr)) return;
+
+            if (!tr.CanRemove)
             {
-                tr.UserPaused = false;
-                tr.Job.CancelJob();
-                tr.State = "已取消";
-                Log("已取消：" + tr.Name);
-                UpdateTaskSummary();
+                _statusText.Text = "任务还在进行中，请先取消再删除";
+                return;
             }
+
+            // 兜底：万一状态是"正在取消"却已经跑完了，这里也放行
+            try { tr.Job.CancelJob(); } catch { }
+
+            _tasks.Remove(tr);
+            Log("已移除任务：" + tr.Name);
+            UpdateTaskSummary();
         }
 
         private void OnOpenFolderClick(object sender, RoutedEventArgs e)

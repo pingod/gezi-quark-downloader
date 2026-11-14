@@ -45,6 +45,17 @@ namespace GeZi.Avalonia
         /// </summary>
         public CloudFile CloudEntry { get; }
 
+        /// <summary>
+        /// 相对于**当前浏览目录**的子路径（仅递归展开出来的条目才有值）。
+        /// <para>
+        /// 勾选一个文件夹下载时，里面的文件要按原目录结构落盘，
+        /// 否则「a/1.zip」和「b/1.zip」会撞名成「1.zip」和「1 (1).zip」，
+        /// 分卷压缩包这类场景直接就废了。
+        /// </para>
+        /// <para>空串 = 就在当前目录下（用户直接勾的文件）。</para>
+        /// </summary>
+        public string RelDir { get; set; } = "";
+
         /// <summary>所属分享的 pwd_id（下载时取直链要用）。</summary>
         public string PwdId { get; }
 
@@ -111,20 +122,52 @@ namespace GeZi.Avalonia
             set { if (_selected != value) { _selected = value; Raise(nameof(Selected)); } }
         }
 
-        /// <summary>大小的人类可读形式。</summary>
-        public string SizeText => Entry.IsDir ? "" : FormatSize(Size);
+        /// <summary>
+        /// 大小的人类可读形式。
+        /// 文件夹的大小要递归求和才知道（见 <see cref="DirSize"/>），
+        /// 列表里不为此额外发请求，所以这里留空。
+        /// </summary>
+        public string SizeText => Entry.IsDir
+            ? (DirSize > 0 ? FormatSize(DirSize) : "")
+            : FormatSize(Size);
+
+        /// <summary>文件夹勾选后由下载流程回填的真实总大小（0 = 未知/未计算）。</summary>
+        private long _dirSize;
+        public long DirSize
+        {
+            get => _dirSize;
+            set
+            {
+                if (_dirSize == value) return;
+                _dirSize = value;
+                Raise(nameof(DirSize));
+                Raise(nameof(SizeText));
+            }
+        }
 
         public string Kind => Entry.IsDir ? "文件夹" : "文件";
 
         /// <summary>列表里显示的名字。文件夹加个视觉前缀，让人知道能进。</summary>
         public string DisplayName => Entry.IsDir ? "📁 " + Entry.Name : Entry.Name;
 
-        /// <summary>只有文件能勾选下载；文件夹靠双击进入。</summary>
-        public bool CanSelect => !Entry.IsDir;
+        /// <summary>
+        /// 是否显示勾选框。
+        /// <para>
+        /// **文件夹也要能勾选**（2026-11 改）。原来这里是 <c>!Entry.IsDir</c>，
+        /// 导致文件夹前面没有复选框 —— 用户想「整个文件夹一起下载」时无从下手，
+        /// 只能双击进去、逐个勾文件，几百个文件的目录基本不可用。
+        /// </para>
+        /// <para>
+        /// 勾上文件夹后由下载流程递归展开成具体文件（见
+        /// <c>MainWindow.ExpandSelectionAsync</c>），所以这里放开不会有副作用。
+        /// 双击进入的交互仍然保留，两者互不冲突。
+        /// </para>
+        /// </summary>
+        public bool CanSelect => true;
 
         /// <summary>悬停提示。</summary>
         public string Hint => Entry.IsDir
-            ? "双击进入文件夹"
+            ? "双击进入文件夹；勾选则连同其中所有文件一起下载"
             : Entry.Name;
 
         public static string FormatSize(long n)
@@ -178,6 +221,7 @@ namespace GeZi.Avalonia
                 Raise(nameof(Percent));
                 Raise(nameof(ProgressText));
                 Raise(nameof(SizeText));
+                Raise(nameof(CanPlayPartial));
             }
         }
 
@@ -222,7 +266,17 @@ namespace GeZi.Avalonia
         public string State
         {
             get => _state;
-            set { if (_state != value) { _state = value; Raise(nameof(State)); Raise(nameof(CanPause)); Raise(nameof(CanResume)); } }
+            set
+            {
+                if (_state == value) return;
+                _state = value;
+                Raise(nameof(State));
+                Raise(nameof(CanPause));
+                Raise(nameof(CanResume));
+                Raise(nameof(CanCancel));
+                Raise(nameof(CanRemove));
+                Raise(nameof(CanPlayPartial));
+            }
         }
 
         private string _error = "";
@@ -239,6 +293,39 @@ namespace GeZi.Avalonia
 
         /// <summary>是否处于可继续状态（已暂停）。</summary>
         public bool CanResume => _state == "已暂停";
+
+        /// <summary>
+        /// 是否还能取消。
+        /// <para>
+        /// 已结束的任务（失败/已取消/已完成）取消按钮必须是灰的 ——
+        /// 对已经不在跑的任务发取消信号没有任何效果，按钮却可点，
+        /// 用户会以为「点了没反应 = 程序卡死」。这正是反馈里的现象。
+        /// </para>
+        /// </summary>
+        public bool CanCancel =>
+            _state == "下载中" || _state == "等待中" || _state == "已暂停"
+            || _state == "获取直链" || _state == "需转存" || _state == "准备中"
+            || _state == "转存中" || _state == "正在取消";
+
+        /// <summary>
+        /// 是否可以从列表移除。
+        /// <para>
+        /// 只有**已结束**的任务才能删：还在跑的任务如果直接从列表拿掉，
+        /// 它就再也没法被取消/查看了（后台仍在写盘）。想中止请先「取消」。
+        /// </para>
+        /// </summary>
+        public bool CanRemove =>
+            _state == "失败" || _state == "已取消" || _state == "已完成"
+            // 「需转存」「获取直链」这类中间态在取链阶段失败后会停住（它们不进入
+            // 下载调度器，也就没有回调来推进状态）。这些也必须能删，
+            // 否则列表里会永久残留几条动不了的记录。
+            || _state == "需转存" || _state == "获取直链" || _state == "准备中"
+            || _state == "转存中";
+
+        /// <summary>
+        /// 是否能「边下边播」：只有正在下载且已经写了数据才有意义。
+        /// </summary>
+        public bool CanPlayPartial => _state == "下载中" && Done > 0;
 
         public bool IsRunning => _state == "下载中";
 
