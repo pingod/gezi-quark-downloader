@@ -1,19 +1,26 @@
-﻿// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
+// GeZi —— 多网盘下载器 (Multi-cloud downloader)
 // Copyright (C) 2026  Yi Yuan
 // This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
+// it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// GNU Affero General Public License for more details.
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/agpl-3.0>.
 
 using System;
 using System.Windows;
-using GeZi.Core.Update;
+using GeZi.Services;
+using GeZi.Providers;
+using GeZi.Providers.Quark;
+using GeZi.Providers.Uc;
+using GeZi.Providers.Aliyun;
+using GeZi.Providers.Xunlei;
+using GeZi.Providers.Shared;
+using GeZi.Providers.Qr;
 
 namespace GeZi
 {
@@ -51,7 +58,8 @@ namespace GeZi
             if (_release.PublishedAt.HasValue)
                 SizeText.Text = _release.PublishedAt.Value.ToLocalTime().ToString("yyyy-MM-dd") + " 发布";
             else if (_release.AssetSize > 0)
-                SizeText.Text = (_release.AssetSize / 1048576.0).ToString("0.0") + " MB";
+                // 🚨 2026-11-04：统一走 Util.FormatSize（1024 进制），不再手写 /1048576.0。
+                SizeText.Text = Util.FormatSize(_release.AssetSize);
             else
                 SizeText.Text = "v" + _release.TagName;
 
@@ -76,9 +84,11 @@ namespace GeZi
                 if (!ShellLaunch.OpenUrl(url))
                     AppDialog.Show(this, "打开浏览器失败，请手动访问：\n\n" + url, "更新");
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                AppDialog.Show(this, "打开浏览器失败：" + ex.Message, "更新");
+                // 两种失败（ShellLaunch 返回 false / 抛异常）给同一句可操作的话：
+                // 直接把网址摆出来让用户手动复制，不再贴异常原文。
+                AppDialog.Show(this, "打开浏览器失败，请手动访问：\n\n" + url, "更新");
             }
             try { Close(); } catch { }
         }

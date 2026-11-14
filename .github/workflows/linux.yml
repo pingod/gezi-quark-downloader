@@ -1,0 +1,91 @@
+name: linux
+
+# Linux / macOS 原生版（Avalonia）的构建与打包。
+#
+# 与 build.yml（Windows WPF）并列：
+#   build.yml  → src/GeZi（WPF，net48）+ 五层 Core/Providers/Engine/Application
+#   linux.yml  → src/GeZi.Avalonia（Avalonia，net8.0）
+#
+# ⚠️ 两者共用同一份 GeZi.Core：Core 是**双目标**（net48 + net8.0），
+#    Windows 走 net48，Linux 走 net8.0。所以这里必须显式 -f net8.0，
+#    否则会试图在 Linux 上编 net48（缺 .NET Framework 参考程序集，必挂）。
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Show toolchain
+        run: dotnet --info
+
+      # 自包含发布要还原 Avalonia / SkiaSharp / ZXing 等 NuGet 包
+      - name: Restore
+        run: dotnet restore src/GeZi.Avalonia/GeZi.Avalonia.csproj -r linux-x64
+
+      # 注意：这里**不**开 TreatWarningsAsErrors。
+      # build.yml（Windows）能开，是因为那条线只有上游五层；
+      # 本线还包含 Linux 分支的 17 网盘层（Cloud/Providers），
+      # 其中若干 provider 是「接口要求返回 Task 但没有真正 await」的形态，
+      # 会产生 CS1998。那是既有实现，不属于本次合并范围，
+      # 为了一个非功能性警告去改正在工作的取链代码不值得。
+      - name: Build (Release, net8.0)
+        run: >
+          dotnet build src/GeZi.Avalonia/GeZi.Avalonia.csproj -c Release -f net8.0
+          --no-restore -nodeReuse:false -p:UseSharedCompilation=false
+
+      # 自包含单目录发布：产物不依赖系统 dotnet，解压即用
+      - name: Publish (self-contained linux-x64)
+        run: >
+          dotnet publish src/GeZi.Avalonia/GeZi.Avalonia.csproj -c Release -f net8.0
+          -r linux-x64 --self-contained true --no-restore -o publish
+
+      # 冒烟：**不启动 GUI**（runner 没有图形会话，起界面必然失败，那不是回归）。
+      # 只验证三件在 CI 里能确定判断的事：
+      #   1) 产物是 x86-64 ELF 且可执行
+      #   2) 自包含布局齐全（apphost + 运行时 + 托管程序集都在）
+      #   3) 动态链接依赖全部可解析（缺 libssl/libX11 之类会在这里暴露）
+      # 功能自检（--selftest 会构造窗口）留到有图形会话的机器上跑。
+      - name: Smoke (layout + linkage)
+        run: |
+          set -e
+          test -x publish/GeZi.Avalonia
+          file publish/GeZi.Avalonia | grep -q 'ELF 64-bit'
+          test -f publish/libcoreclr.so
+          test -f publish/GeZi.Core.dll
+          test -f publish/GeZi.Avalonia.dll
+          # ldd 报 "not found" 时退出码非 0，正好当断言
+          ! ldd publish/GeZi.Avalonia | grep -q 'not found'
+
+      - name: Package (tar.gz + SHA256)
+        run: |
+          set -e
+          mkdir -p artifacts
+          cp LICENSE THIRD-PARTY-NOTICES.md artifacts/ 2>/dev/null || true
+          cp -r publish artifacts/GeZi-linux-x64
+          tar -C artifacts -czf artifacts/GeZi-linux-x64.tar.gz GeZi-linux-x64
+          cd artifacts && sha256sum GeZi-linux-x64.tar.gz > GeZi-linux-x64.tar.gz.sha256
+          ls -lh artifacts
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeZi-linux-x64
+          path: |
+            artifacts/GeZi-linux-x64.tar.gz
+            artifacts/GeZi-linux-x64.tar.gz.sha256
+          if-no-files-found: error

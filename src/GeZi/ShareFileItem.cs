@@ -1,18 +1,26 @@
-﻿// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
+// GeZi —— 多网盘下载器 (Multi-cloud downloader)
 // Copyright (C) 2026  Yi Yuan
 // This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
+// it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// GNU Affero General Public License for more details.
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/agpl-3.0>.
 
 using System.ComponentModel;
+using GeZi.Providers;
+using GeZi.Providers.Quark;
+using GeZi.Providers.Uc;
+using GeZi.Providers.Aliyun;
+using GeZi.Providers.Xunlei;
+using GeZi.Providers.Shared;
+using GeZi.Providers.Qr;
 
+using GeZi.Services;
 namespace GeZi
 {
     /// <summary>
@@ -70,13 +78,19 @@ namespace GeZi
         {
             get
             {
+                // 🚨🚨 2026-11-04：**必须走 Util.FormatSize**，不许再有自己的实现。
+                //   历史上这里有一份私有 FormatSize 用 1000 进制，
+                //   而任务页用 Util.FormatSize 的 1024 进制 →
+                //   同一个文件「分享列表 15.34 MB / 任务页 14.63 MB」，差 4.9%，
+                //   用户反复报「软件里显示的大小和本地、和网盘都对不上」。
+                //   现在全程序只有 Util.FormatSize 一份（1024 进制）。
                 if (!IsDir)
-                    return FormatSize(Size);
+                    return Util.FormatSize(Size);
                 if (_dirSizeFailed)
                     return "—";
                 if (_dirSize == null)
                     return "计算中…";
-                return FormatSize(_dirSize.Value);
+                return Util.FormatSize(_dirSize.Value);
             }
         }
 
@@ -88,19 +102,9 @@ namespace GeZi
             if (h != null) h(this, new PropertyChangedEventArgs(name));
         }
 
-        private static string FormatSize(long n)
-        {
-            // 🚨 同 Util.FormatSize：原来 1024 进制却标 "KB/MB/GB"，
-            // 与夸克分享页（1000 进制）对不上，用户以为文件变小了。统一改 1000 进制。
-            double v = n;
-            string[] units = { "B", "KB", "MB", "GB", "TB" };
-            int i = 0;
-            while (v >= 1000 && i < units.Length - 1)
-            {
-                v /= 1000.0;
-                i++;
-            }
-            return i == 0 ? n + " B" : v.ToString("F2") + " " + units[i];
-        }
+        // 2026-11-04：私有 FormatSize 已删除。
+        //   它用 1000 进制，与 Util.FormatSize 的 1024 进制冲突，
+        //   导致同一文件在分享列表和任务页显示相差 4.9%。
+        //   全程序统一走 Util.FormatSize，**不要再加第二份实现**。
     }
 }

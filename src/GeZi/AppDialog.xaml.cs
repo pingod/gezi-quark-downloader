@@ -1,22 +1,30 @@
-﻿// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
+// GeZi —— 多网盘下载器 (Multi-cloud downloader)
 // Copyright (C) 2026  Yi Yuan
 // This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
+// it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// GNU Affero General Public License for more details.
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/agpl-3.0>.
 
 using System;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using GeZi.Providers;
+using GeZi.Providers.Quark;
+using GeZi.Providers.Uc;
+using GeZi.Providers.Aliyun;
+using GeZi.Providers.Xunlei;
+using GeZi.Providers.Shared;
+using GeZi.Providers.Qr;
 
+using GeZi.Services;
 namespace GeZi
 {
     /// <summary>
@@ -101,7 +109,7 @@ namespace GeZi
         /// 右边 <paramref name="secondaryText"/>（次按钮，返回 <see cref="MessageBoxResult.Cancel"/>）。
         /// </summary>
         /// <param name="dontAskAgain">输出：用户是否勾选了「此后不再提示」</param>
-        /// <returns>主按钮 = OK，次按钮 = Cancel，右上角 X / Esc = Cancel</returns>
+        /// <returns>主按钮 = OK，次按钮 = Cancel，右上角 X / Esc = None（没点任何按钮，调用方可区分「反悔」与「点了次按钮」）</returns>
         public static MessageBoxResult ShowWithDontAsk(Window owner, string text, string title,
                                                        string primaryText, string secondaryText,
                                                        MessageBoxImage icon, out bool dontAskAgain)
@@ -288,13 +296,12 @@ namespace GeZi
 
         private void OnCancel(object sender, RoutedEventArgs e)
         {
-            // 点右上角 X：行为跟"取消/否"一致
-            switch (_result)
-            {
-                default:
-                    _result = MessageBoxResult.Cancel;
-                    break;
-            }
+            // 点右上角 X / Esc：没点任何按钮 → 返回 None，让调用方有机会区别对待。
+            // 若此处返回 Cancel，调用方（如 MainWindow.Tray 的 OnWindowClosing）会把
+            // 「点弹窗叉号」当成「点了次按钮（直接退出）」→ 关掉主窗口/进程。
+            // 语义上 X = 放弃这次选择，既不是 OK 也不是 Cancel。
+            _result = MessageBoxResult.None;
+
             // 如果是 OK-only 的提示窗，关闭即视为已读
             if (Btn2.Visibility == Visibility.Collapsed && Btn3.Visibility == Visibility.Collapsed)
                 _result = MessageBoxResult.OK;

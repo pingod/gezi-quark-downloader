@@ -1,15 +1,15 @@
-﻿// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
+// GeZi —— 多网盘下载器 (Multi-cloud downloader)
 // Copyright (C) 2026  Yi Yuan
 // This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
+// it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// GNU Affero General Public License for more details.
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/agpl-3.0>.
 
 using System;
 using System.Reflection;
@@ -18,7 +18,15 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using GeZi.Providers;
+using GeZi.Providers.Quark;
+using GeZi.Providers.Uc;
+using GeZi.Providers.Aliyun;
+using GeZi.Providers.Xunlei;
+using GeZi.Providers.Shared;
+using GeZi.Providers.Qr;
 
+using GeZi.Services;
 namespace GeZi
 {
     /// <summary>
@@ -53,8 +61,9 @@ namespace GeZi
         /// </remarks>
         private static readonly string[,] Features =
         {
+            { "四网盘支持", "夸克 / UC / 阿里云盘 / 迅雷云盘，自动识别链接归属" },
             { "解析分享", "链接、提取码、整段分享文案都能直接粘" },
-            { "免转存下载", "不往自己网盘写中转文件，省空间、不留垃圾" },
+            { "免转存下载", "夸克 / UC 分享不写中转文件，省空间、不留垃圾" },
             { "高速下载", "单文件最多 512 个连接，支持断点续传" },
             { "扫码登录", "浏览「我的网盘」，支持转存与删除" },
             { "边下边播", "目标文件从 0 连续增长，下载中即可播放" },
@@ -170,8 +179,8 @@ namespace GeZi
             catch (Exception ex)
             {
                 AppDialog.Show(this,
-                    "检查更新失败：" + ex.Message
-                    + "\n\n你也可以手动打开 Releases 页查看：\n" + UpdateService.ReleasesPageUrl,
+                    "检查更新失败：" + ErrorText.Describe(ex)
+                    + "。\n\n你也可以手动打开发布页查看：\n" + UpdateService.ReleasesPageUrl,
                     "检查更新", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
             finally
@@ -189,7 +198,7 @@ namespace GeZi
         /// 打开「更新详情」窗口。
         /// 抽出来是因为有两个入口：「检查更新」按钮，以及启动气泡跳过来的场景。
         /// </summary>
-        private void OpenUpdatePrompt(GeZi.Core.Update.GitHubRelease m)
+        private void OpenUpdatePrompt(GeZi.Services.GitHubRelease m)
         {
             if (m == null) return;
 
@@ -282,22 +291,32 @@ namespace GeZi
         /// <summary>点赞赏码 → 弹一个放大的窗口（和 Flet 版的「赞赏支持」弹窗同一个意思）。</summary>
         private void OnQrClick(object sender, RoutedEventArgs e)
         {
-            try { ShowReward(); } catch { }
+            try { ShowReward(this); } catch { }
         }
 
-        private void ShowReward()
+        /// <summary>
+        /// 只弹「赞赏码」小窗（**不打开整个关于窗口**）。
+        /// <para>
+        /// 🚨 2026-11-03 用户实测：「点赞赏支持为什么弹出旧版关于界面？」
+        /// 根因是主窗口的 <c>OnAboutReward</c> 直接 <c>new AboutWindow().ShowDialog()</c> ——
+        /// 把整个关于窗口（品牌区 + 功能特性 + 赞赏码）都弹出来了。
+        /// 赞赏入口只该给赞赏码，所以把这段逻辑抽成**静态方法**，主窗口直接调用。
+        /// </para>
+        /// </summary>
+        public static void ShowReward(Window owner)
         {
             var win = new Window
             {
-                Owner = this,
+                Owner = owner,
                 Title = "赞赏支持",
                 WindowStyle = WindowStyle.None,
                 ResizeMode = ResizeMode.NoResize,
                 SizeToContent = SizeToContent.WidthAndHeight,
                 ShowInTaskbar = false,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Background = (Brush)FindResource("SurfaceBrush"),
-                FontFamily = (FontFamily)FindResource("AppFontFamily"),
+                // ⚠️ 静态方法里没有实例 FindResource，统一走 Application.Current。
+                Background = (Brush)Application.Current.FindResource("SurfaceBrush"),
+                FontFamily = (FontFamily)Application.Current.FindResource("AppFontFamily"),
                 SnapsToDevicePixels = true,
                 UseLayoutRounding = true,
             };
@@ -328,7 +347,7 @@ namespace GeZi
                 MinWidth = 96,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Margin = new Thickness(0, 14, 0, 0),
-                Style = FindResource("PrimaryButton") as Style,
+                Style = Application.Current.FindResource("PrimaryButton") as Style,
             };
             close.Click += (s2, e2) => { try { win.Close(); } catch { } };
 
@@ -339,7 +358,7 @@ namespace GeZi
                 FontSize = 14,
                 FontWeight = FontWeights.SemiBold,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                Foreground = (Brush)FindResource("TextPrimaryBrush"),
+                Foreground = (Brush)Application.Current.FindResource("TextPrimaryBrush"),
             });
             panel.Children.Add(new TextBlock
             {
@@ -347,14 +366,14 @@ namespace GeZi
                 FontSize = 11,
                 Margin = new Thickness(0, 4, 0, 10),
                 HorizontalAlignment = HorizontalAlignment.Center,
-                Foreground = (Brush)FindResource("TextTertiaryBrush"),
+                Foreground = (Brush)Application.Current.FindResource("TextTertiaryBrush"),
             });
             panel.Children.Add(img);
             panel.Children.Add(close);
 
             win.Content = new Border
             {
-                BorderBrush = (Brush)FindResource("BorderBrushSoft"),
+                BorderBrush = (Brush)Application.Current.FindResource("BorderBrushSoft"),
                 BorderThickness = new Thickness(1),
                 Child = panel,
             };

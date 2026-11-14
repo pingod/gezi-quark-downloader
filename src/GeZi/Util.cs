@@ -1,38 +1,83 @@
-﻿// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
+// GeZi —— 多网盘下载器 (Multi-cloud downloader)
 // Copyright (C) 2026  Yi Yuan
 // This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
+// it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// GNU Affero General Public License for more details.
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/agpl-3.0>.
 
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using GeZi.Providers;
+using GeZi.Providers.Quark;
+using GeZi.Providers.Uc;
+using GeZi.Providers.Aliyun;
+using GeZi.Providers.Xunlei;
+using GeZi.Providers.Shared;
+using GeZi.Providers.Qr;
 
+using GeZi.Services;
 namespace GeZi
 {
     public static class Util
     {
+        /// <summary>
+        /// **全程序唯一**的字节数格式化（2026-11-04 用户拍板统一）。
+        /// <para>
+        /// 🚨🚨 统一为 **1024 进制**（KiB/MiB/GiB 的数值，但沿用 KB/MB/GB 的写法）。
+        /// 理由：
+        ///   ① Windows 资源管理器用 1024 —— 用户拿它对照，必须一致；
+        ///   ② 夸克 / UC / 阿里 / 迅雷 四家网页版都是 1024
+        ///      （实测夸克容量接口 total=10737418240 正好 = 10 × 1024³）；
+        ///   ③ 程序内所有地方（我的网盘、分享列表、任务页、日志、历史、小窗）
+        ///      必须用同一套，否则同一个文件在不同页面显示不同大小。
+        /// </para>
+        /// <para>
+        /// ⚠️ **不要再出现第二份实现**。历史上 <c>ShareFileItem.cs</c> 自己写了一份
+        /// 1000 进制的私有 FormatSize，导致「分享列表 15.34 MB / 任务页 14.63 MB」
+        /// 同一个文件差 4.9%，用户反复报「大小对不上」。
+        /// 现在那边已改为直接调用本方法。
+        /// </para>
+        /// </summary>
         public static string FormatSize(long n)
         {
-            // 🚨 原来除以 1024 却标 "KB/MB/GB"（那是 KiB/MiB/GiB）。
-            // 后果：同一个文件「夸克分享页写 9.54 GB、本程序写 8.89 GB」，用户以为少下了。
-            // 改成 **1000 进制** —— 单位名副其实，也顺带让速度显示符合网络速率的惯例（1 MB/s = 10^6 B/s）。
+            if (n < 0) n = 0;
             double v = n;
             string[] units = { "B", "KB", "MB", "GB", "TB" };
             int i = 0;
-            while (v >= 1000 && i < units.Length - 1)
+            while (v >= 1024 && i < units.Length - 1)
             {
-                v /= 1000.0;
+                v /= 1024.0;
                 i++;
             }
             return i == 0 ? n + " B" : v.ToString("F2") + " " + units[i];
+        }
+
+        /// <summary>
+        /// 速度专用的紧凑格式（字节/秒）。2026-11-08 用户反馈小窗速度数字多时挤：
+        /// <see cref="FormatSize"/> 对 MB 保留两位小数（"5.43 MB/s" 9 字符），
+        /// 在 250px 宽的小窗等宽字体下叠字。这里最多保留 1 位小数，
+        /// ≥100 时取整（"24 MB/s" 7 字符），把速度列压回安全宽度。
+        /// </summary>
+        public static string FormatSpeed(long bytesPerSecond)
+        {
+            if (bytesPerSecond <= 0) return "0 B/s";
+            double v = bytesPerSecond;
+            string[] units = { "B/s", "KB/s", "MB/s", "GB/s" };
+            int i = 0;
+            while (v >= 1024 && i < units.Length - 1)
+            {
+                v /= 1024.0;
+                i++;
+            }
+            if (i == 0) return bytesPerSecond + " B/s";
+            return v.ToString(v >= 100 ? "F0" : "F1") + " " + units[i];
         }
 
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]

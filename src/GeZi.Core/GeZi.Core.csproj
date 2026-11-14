@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <!-- 双目标：
@@ -33,6 +33,12 @@
     <!-- System.Text.Json：net48 不自带，但清理队列等需要它做序列化。
          用 NuGet 版（纯托管，无原生依赖），net8.0 侧用框架自带的。 -->
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <!-- 诊断包 zip（ZipArchive） -->
+    <Reference Include="System.IO.Compression" />
+    <!-- 阿里云盘设备签名（secp256k1）用 BigInteger 做点运算与 recovery id 推导。
+         ECDSA 本身交给 ECDsaCng（Windows CNG 原生支持 secp256k1），
+         只有「从签名反推公钥点」这一步需要手写模运算。 -->
+    <Reference Include="System.Numerics" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">

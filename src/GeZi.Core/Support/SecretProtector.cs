@@ -1,4 +1,4 @@
-// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
+﻿// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
 // Copyright (C) 2026  Yi Yuan
 //
 // This program is free software: you can redistribute it and/or modify
@@ -50,6 +50,28 @@ namespace GeZi.Core.Support
         /// <summary>是否已加密（带我们的前缀标记）。</summary>
         public static bool IsProtected(string value)
             => !string.IsNullOrEmpty(value) && value.StartsWith(Prefix, StringComparison.Ordinal);
+
+        /// <summary>
+        /// 字段级加密：空值原样返回；已是密文原样返回。
+        /// <para>
+        /// 与 <see cref="Protect"/> 的区别只在**空值语义**：<c>Protect("")</c> 返回空串，
+        /// 而本方法把 <c>null</c> 也原样返回（<c>null</c> 而非空串），
+        /// 这样「字段本来没有」与「字段是空字符串」在历史记录里仍然可区分。
+        /// WPF 版的 <c>HistoryStore</c> 依赖这一点。
+        /// </para>
+        /// </summary>
+        public static string ProtectField(string plain)
+        {
+            if (string.IsNullOrEmpty(plain)) return plain;
+            return IsProtected(plain) ? plain : Protect(plain);
+        }
+
+        /// <summary>字段级解密：无前缀视为旧明文原样返回；解不开返回空串（绝不返回乱码）。</summary>
+        public static string UnprotectField(string stored)
+        {
+            if (string.IsNullOrEmpty(stored)) return stored;
+            return Unprotect(stored);
+        }
 
         /// <summary>
         /// 加密明文。已是密文则原样返回；空字符串返回空字符串。
