@@ -3,7 +3,7 @@
   <!-- Linux/macOS 构建不需要 Windows 的 DPI/权限声明；
        这里保留一个最小清单，仅为让 SDK 的 ApplicationManifest 属性有目标可用
        （去掉会报 "app.manifest not found"）。 -->
-  <assemblyIdentity version="2.5.0.0" name="GeZi.Avalonia" />
+  <assemblyIdentity version="2.5.1.0" name="GeZi.Avalonia" />
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">

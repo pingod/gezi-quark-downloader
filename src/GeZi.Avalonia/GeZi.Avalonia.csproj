@@ -13,7 +13,7 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>GeZi.Avalonia</AssemblyName>
     <RootNamespace>GeZi.Avalonia</RootNamespace>
-    <Version>2.5.0</Version>
+    <Version>2.5.1</Version>
     <!-- Avalonia 的绑定默认走反射；这里显式关掉编译期绑定，避免 x:DataType 缺失时报错 -->
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
     <ApplicationManifest>app.manifest</ApplicationManifest>
