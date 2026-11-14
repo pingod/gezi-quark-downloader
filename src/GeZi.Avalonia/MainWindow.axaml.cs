@@ -80,6 +80,26 @@ namespace GeZi.Avalonia
 
         private readonly List<string> _logLines = new List<string>();
 
+        /// <summary>待刷新的日志行。任意线程入队，UI 线程定时批量消费（见 <see cref="Log"/>）。</summary>
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> _logPending =
+            new System.Collections.Concurrent.ConcurrentQueue<string>();
+
+        /// <summary>界面上保留的日志行数上限。</summary>
+        private const int LogMaxLines = 200;
+
+        /// <summary>一次刷新最多处理的行数，避免积压时单拍占用 UI 太久。</summary>
+        private const int LogFlushBatch = 200;
+
+        // 重复抑制（与 WPF 版同一套判据）。只作用于引擎的过程日志，
+        // 结果性信息（完成/失败/删除）永不拦 —— 见 LogDupExempt。
+        private readonly Dictionary<string, int> _logDupCount = new Dictionary<string, int>();
+        private readonly Dictionary<string, DateTime> _logDupSince = new Dictionary<string, DateTime>();
+        private readonly object _logDupGate = new object();
+        private static readonly TimeSpan LogDupWindow = TimeSpan.FromSeconds(8);
+
+        /// <summary>日志攒批刷新的节拍器（见 <see cref="Log"/> / <see cref="FlushLog"/>）。</summary>
+        private DispatcherTimer _logFlushTimer;
+
         private TrayHost _tray;
         private MiniWindow _mini;
         private bool _reallyExit;
@@ -188,6 +208,16 @@ namespace GeZi.Avalonia
 
             // 启动时清理上次遗留的临时目录（程序可能中途退出过）
             _ = DrainCleanupQueueAsync();
+
+            // 日志攒批刷新的节拍器。250ms 一拍：比人眼能分辨的慢一点，
+            // 但足够让日志看起来是实时的；关键是它把「每条日志一次布局 + 一次写盘」
+            // 变成「每 250ms 一次」，这是下载时界面能点动的直接原因。
+            _logFlushTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(250),
+            };
+            _logFlushTimer.Tick += (s, e) => FlushLog();
+            _logFlushTimer.Start();
 
             Log("就绪。粘贴夸克分享链接后点「解析」。");
             if (string.IsNullOrEmpty(_settings.Cookie))
@@ -1996,49 +2026,177 @@ namespace GeZi.Avalonia
         /// 定位（尤其异常堆栈）。有了文件日志，排查时直接看最后几十行就有答案，
         /// 不用让用户复述或截屏。
         /// </summary>
+        /// <remarks>
+        /// 🚨🚨 2026-11-14 —— 「下载时界面点不动」的**主因就在这个方法**，三处叠加：
+        ///
+        /// 1) **每条日志都在 UI 线程同步写盘**（<see cref="AppendToLogFile"/> 里的
+        ///    <c>File.AppendAllText</c> + 每次 <c>FileInfo</c> 建对象查长度）。
+        ///    引擎在高并发下每秒能产上百条，UI 线程被 IO 拖住，点击事件排在后面。
+        /// 2) **每条日志都全量重建文本**：<c>_logText.Text = string.Join(200 行)</c>。
+        ///    TextBlock 带 <c>TextWrapping="Wrap"</c> 时，每次赋值都要把 200 行
+        ///    **重新测量、重新折行**。200 行 × 每秒 158 次 ≈ 每秒 3 万行折行。
+        /// 3) 引擎的 `[调试]` 级日志**全部**进界面（WPF 版早就过滤掉了，见
+        ///    MainWindow.Log.cs 的同名判据），而实测 158 行/秒里 11940 条全是
+        ///    `[调试] 配置项 … 已变更` —— 纯噪声，一条都不该显示。
+        ///
+        /// 修法：调试级直接丢弃；其余入队，由 <see cref="_logFlushTimer"/> 每 250ms
+        /// 攒批刷一次控件，落盘也挪到那个时机（一次写多行）。
+        /// </remarks>
         private void Log(string msg)
         {
-            if (!Dispatcher.UIThread.CheckAccess())
-            {
-                Dispatcher.UIThread.Post(() => Log(msg));
+            if (string.IsNullOrEmpty(msg)) return;
+
+            // ① 引擎的调试级日志一律不进界面。
+            //    与 WPF 版（src/GeZi/MainWindow.Log.cs）同一判据：
+            //    逐包/逐分片级别的追踪没有日常诊断价值，高并发下每秒上万条。
+            if (msg.StartsWith("[调试]", StringComparison.Ordinal)
+                || msg.StartsWith("[debug]", StringComparison.Ordinal))
                 return;
+
+            // ② 重复抑制：同一模板 8 秒内只出 1 条，窗口到期补一条「同类 N 条已合并」。
+            //    否则「取消一次下载灌 200 条分片错误」会把正常日志挤光。
+            string summary = null;
+            if (!LogDupExempt(msg))
+            {
+                string key = LogDupKey(msg);
+                lock (_logDupGate)
+                {
+                    DateTime now = DateTime.UtcNow;
+                    if (!_logDupSince.TryGetValue(key, out DateTime since))
+                    {
+                        _logDupSince[key] = now;
+                        _logDupCount[key] = 0;
+                    }
+                    else if ((now - since) >= LogDupWindow)
+                    {
+                        _logDupCount.TryGetValue(key, out int n);
+                        _logDupSince[key] = now;
+                        _logDupCount[key] = 0;
+                        if (n > 0) summary = "（同类 " + n + " 条已合并）";
+                    }
+                    else
+                    {
+                        _logDupCount.TryGetValue(key, out int n);
+                        _logDupCount[key] = n + 1;
+                        return;   // 窗口内重复 → 只计数，不入队
+                    }
+                }
             }
 
+            // ③ 入队。任意线程可调，不碰控件、不碰磁盘。
             string line = DateTime.Now.ToString("HH:mm:ss") + "  " + msg;
-            _logLines.Add(line);
-            if (_logLines.Count > 200) _logLines.RemoveAt(0);
+            _logPending.Enqueue(line);
+            if (summary != null)
+                _logPending.Enqueue(DateTime.Now.ToString("HH:mm:ss") + "  " + summary);
+        }
+
+        /// <summary>
+        /// 把攒下的日志一次性刷进界面与磁盘。**只在 UI 线程调用**。
+        ///
+        /// 一次只处理一批（上限 <see cref="LogFlushBatch"/>），剩下的留给下一拍 ——
+        /// 万一积压很多，也不让一次刷新占住 UI 几十毫秒。
+        /// </summary>
+        private void FlushLog()
+        {
+            if (_logPending.IsEmpty) return;
+
+            var lines = new List<string>();
+            var sb = new System.Text.StringBuilder();
+            while (lines.Count < LogFlushBatch && _logPending.TryDequeue(out string line))
+            {
+                lines.Add(line);
+                sb.Append(line).Append('\n');
+            }
+            if (lines.Count == 0) return;
+
+            foreach (string line in lines)
+            {
+                _logLines.Add(line);
+            }
+            int overflow = _logLines.Count - LogMaxLines;
+            if (overflow > 0)
+                _logLines.RemoveRange(0, overflow);
+
+            // 一次赋值，一次折行 —— 不是每条一次。
             _logText.Text = string.Join(Environment.NewLine, _logLines);
-            AppendToLogFile(line);
+
+            // 磁盘写入同样攒批：一次 AppendAllText 写 N 行，而不是 N 次。
+            AppendToLogFile(sb.ToString());
         }
 
         private static readonly object LogFileLock = new object();
+        private static readonly object LogFileWriteGate = new object();
+        private static bool _logFileWritePending;
 
-        private static void AppendToLogFile(string line)
+        /// <summary>
+        /// 把一批日志行追加到磁盘。**不在 UI 线程同步做** ——
+        /// 同步写盘是「下载时界面卡顿」的直接原因之一（见 <see cref="Log"/> 的注释）。
+        /// 这里丢到线程池，并用 <see cref="_logFileWritePending"/> 合并并发写入，
+        /// 避免高并发下开出一堆线程同时抢 <see cref="LogFileLock"/>。
+        /// </summary>
+        private static void AppendToLogFile(string lines)
         {
-            try
+            if (string.IsNullOrEmpty(lines)) return;
+
+            lock (LogFileWriteGate)
             {
-                lock (LogFileLock)
+                if (_logFileWritePending) return;   // 已有一个写任务在排队，丢掉这批（日志不要求全量）
+                _logFileWritePending = true;
+            }
+
+            Task.Run(() =>
+            {
+                try
                 {
-                    string path = Path.Combine(
-                        Path.GetDirectoryName(SettingsStore.ConfigPath) ?? ".", "GeZi.log");
-
-                    // 超过 1MB 就轮转，避免无限增长
-                    var fi = new FileInfo(path);
-                    if (fi.Exists && fi.Length > 1024 * 1024)
+                    lock (LogFileLock)
                     {
-                        string old = path + ".1";
-                        try { File.Delete(old); } catch { }
-                        File.Move(path, old);
-                    }
+                        string path = Path.Combine(
+                            Path.GetDirectoryName(SettingsStore.ConfigPath) ?? ".", "GeZi.log");
 
-                    File.AppendAllText(path,
-                        DateTime.Now.ToString("yyyy-MM-dd ") + line + Environment.NewLine);
+                        // 超过 1MB 就轮转，避免无限增长
+                        var fi = new FileInfo(path);
+                        if (fi.Exists && fi.Length > 1024 * 1024)
+                        {
+                            string old = path + ".1";
+                            try { File.Delete(old); } catch { }
+                            File.Move(path, old);
+                        }
+
+                        File.AppendAllText(path,
+                            DateTime.Now.ToString("yyyy-MM-dd ") + lines.Replace("\n", Environment.NewLine));
+                    }
                 }
-            }
-            catch
-            {
-                // 写日志失败绝不能影响主流程
-            }
+                catch
+                {
+                    // 写日志失败绝不能影响主流程
+                }
+                finally
+                {
+                    lock (LogFileWriteGate) _logFileWritePending = false;
+                }
+            });
+        }
+
+        /// <summary>把一条日志归一成模板键：抹掉数字、分片 ID、十六进制串，保留中文骨架。</summary>
+        private static string LogDupKey(string msg)
+        {
+            if (string.IsNullOrEmpty(msg)) return "";
+            string s = System.Text.RegularExpressions.Regex.Replace(msg, "[0-9a-fA-F]{6,}", "H");
+            s = System.Text.RegularExpressions.Regex.Replace(s, "\\d+", "N");
+            return s.Length > 120 ? s.Substring(0, 120) : s;
+        }
+
+        /// <summary>这些是结果性信息，重复也必须每条都显示，不参与抑制。</summary>
+        private static bool LogDupExempt(string msg)
+        {
+            if (string.IsNullOrEmpty(msg)) return true;
+            return msg.IndexOf("全部完成", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("下载完成", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("完成：", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("失败：", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("已成功删除", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("已取消", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("连接租约", StringComparison.Ordinal) >= 0;
         }
 
         private static string ShortenPath(string path)

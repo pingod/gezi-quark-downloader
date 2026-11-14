@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- UI 响应性探针：单独一个项目，因为它要引用 Avalonia 应用本体，
+       而 _smoke 里的冒烟测试只引用 Core/Providers/Engine（net8 控制台）。
+       混在一起会把 Avalonia 依赖塞进冒烟测试。 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>uiprobe</AssemblyName>
+    <NoWarn>CA1416</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/GeZi.Avalonia/GeZi.Avalonia.csproj" />
+  </ItemGroup>
+</Project>

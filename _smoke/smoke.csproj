@@ -7,6 +7,10 @@
     <AssemblyName>smoke</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <!-- uiprobe 是独立项目（引用 Avalonia 应用本体），默认的递归通配会把它也编进来 -->
+    <Compile Remove="uiprobe/**" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../src/GeZi.Core/GeZi.Core.csproj" />
     <!-- 17 网盘通道已随上游五层重构移到 Providers（Cloud/* 与四家官方客户端） -->
     <ProjectReference Include="../src/GeZi.Providers/GeZi.Providers.csproj" />

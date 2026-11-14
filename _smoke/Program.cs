@@ -18,8 +18,21 @@ internal static class Program
 {
     private static int _failed;
 
-    private static async Task<int> Main()
+    private static async Task<int> Main(string[] args)
     {
+        // 只跑性能探针：本地回环服务器，不碰网络，可在任何环境复现。
+        if (args != null && Array.IndexOf(args, "--perf") >= 0)
+            return await PerfProbe.RunAsync();
+        if (args != null && Array.IndexOf(args, "--subs") >= 0)
+            return PerfProbe.RunSubscriptionAsync();
+        // --perf-all：两个引擎侧探针一起跑（CI 用，本地也可）
+        if (args != null && Array.IndexOf(args, "--perf-all") >= 0)
+        {
+            int bad = PerfProbe.RunSubscriptionAsync();
+            bad += await PerfProbe.RunAsync();
+            return bad == 0 ? 0 : 1;
+        }
+
         Console.WriteLine("=== GeZi.Core 移植冒烟测试 (net8.0 / Linux) ===");
         Console.WriteLine();
 
@@ -48,6 +61,8 @@ internal static class Program
         _failed += PlatformTests.Failed;
         await UploadTests.RunAsync();
         _failed += UploadTests.Failed;
+
+        _failed += await PerfProbe.RunAsync();
 
         Console.WriteLine();
         Console.WriteLine(_failed == 0 ? "全部通过 ✅" : $"{_failed} 项失败 ❌");

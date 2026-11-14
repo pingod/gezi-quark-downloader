@@ -85,3 +85,27 @@ GeZi.SelfTest.exe pan-probe xunlei "<分享链接>" "<pan_token>" "<x-captcha-to
 3. `python tools/package_release.py --from-build --out artifacts`（产物随 workflow 上传）
 
 任何一步失败即红线，不允许「先合并再修」。
+---
+
+## 性能回归门禁
+
+界面「点不动」这类问题靠肉眼看只能得出「卡」，判断不了改完好了多少。
+所以有两个**纯本地回环**（不联网、不需要真实网盘）的数量级探针，已接进 CI：
+
+```bash
+dotnet run --project _smoke/smoke.csproj -c Release -f net8.0 -- --perf-all
+```
+
+| 探针 | 测什么 | 判据 |
+|---|---|---|
+| 订阅/退订 | `ChunkDownloader` 用完是否退订配置事件 | Dispose 后触发配置变更，日志增量必须为 0 |
+| 进度节流 | 一次 48MB × 64 线程下载的进度回调次数 | ≤ 400 次（未节流时是 1000+） |
+
+探针同时校验**端到端**：下载跑完后，服务配置对象上的订阅者必须为 0 个。
+这一条才是真正的护栏 —— 只测 `Dispose()` 本身会漏掉「创建方忘了调」。
+
+> 2026-11-14 实测：去掉 `using` 后残留 156 个订阅者（= 分片数），探针立即失败。
+
+界面侧的响应性另有 `_smoke/uiprobe`（需要图形会话，不进 CI）：
+在真窗口里洪泛 5 万条日志，量 UI 线程「投递 → 执行」的延迟，
+中位 < 20ms、P99 < 200ms 视为可响应。

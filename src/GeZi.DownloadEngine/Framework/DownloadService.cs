@@ -3063,11 +3063,14 @@ public class DownloadService : AbstractDownloadService
     private async Task<Chunk> DownloadChunkNoSemaphore(Chunk chunk, Request request, PauseToken pause,
         CancellationTokenSource cancellationTokenSource)
     {
-        ChunkDownloader chunkDownloader = new ChunkDownloader(chunk, Options, Package.Storage, _logger, Options.Transport);
-        chunkDownloader.DownloadProgressChanged += OnChunkDownloadProgressChanged;
-
-        cancellationTokenSource.Token.ThrowIfCancellationRequested();
-        return await chunkDownloader.Download(request, pause, cancellationTokenSource.Token).ConfigureAwait(false);
+        // using：分片结束后必须退订配置事件，否则配置对象上的订阅者列表
+        // 会随历史分片数无限增长（见 ChunkDownloader.Dispose 的注释）。
+        using (ChunkDownloader chunkDownloader = new ChunkDownloader(chunk, Options, Package.Storage, _logger, Options.Transport))
+        {
+            chunkDownloader.DownloadProgressChanged += OnChunkDownloadProgressChanged;
+            cancellationTokenSource.Token.ThrowIfCancellationRequested();
+            return await chunkDownloader.Download(request, pause, cancellationTokenSource.Token).ConfigureAwait(false);
+        }
     }
 
     private async Task SerialDownload(PauseToken pauseToken)
@@ -3088,27 +3091,30 @@ public class DownloadService : AbstractDownloadService
 
     private async Task<Chunk> DownloadChunk(Chunk chunk, Request request, PauseToken pause, CancellationTokenSource cancellationTokenSource)
     {
-        ChunkDownloader chunkDownloader = new ChunkDownloader(chunk, Options, Package.Storage, _logger, Options.Transport);
-        chunkDownloader.DownloadProgressChanged += OnChunkDownloadProgressChanged;
-        await _parallelSemaphore.WaitAsync(cancellationTokenSource.Token).ConfigureAwait(false);
-        try
+        // using：见 DownloadChunkNoSemaphore 的同名注释。
+        using (ChunkDownloader chunkDownloader = new ChunkDownloader(chunk, Options, Package.Storage, _logger, Options.Transport))
         {
-            cancellationTokenSource.Token.ThrowIfCancellationRequested();
-            return await chunkDownloader.Download(request, pause, cancellationTokenSource.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception)
-        {
-            cancellationTokenSource.Token.ThrowIfCancellationRequested();
-            cancellationTokenSource.Cancel(false);
-            throw;
-        }
-        finally
-        {
-            _parallelSemaphore.Release();
+            chunkDownloader.DownloadProgressChanged += OnChunkDownloadProgressChanged;
+            await _parallelSemaphore.WaitAsync(cancellationTokenSource.Token).ConfigureAwait(false);
+            try
+            {
+                cancellationTokenSource.Token.ThrowIfCancellationRequested();
+                return await chunkDownloader.Download(request, pause, cancellationTokenSource.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                cancellationTokenSource.Token.ThrowIfCancellationRequested();
+                cancellationTokenSource.Cancel(false);
+                throw;
+            }
+            finally
+            {
+                _parallelSemaphore.Release();
+            }
         }
     }
 }

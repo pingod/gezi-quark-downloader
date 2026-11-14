@@ -42,6 +42,13 @@ namespace GeZi.DownloadEngine
         public const int DefaultThreads = 16;
 
         /// <summary>
+        /// 进度上报的最小间隔（毫秒）。见 <c>DownloadProgressChanged</c> 订阅处的长注释：
+        /// 引擎每 64KB 就报一次，256 路并发下是每秒上千次 Dispatcher.Post，
+        /// 会把 UI 线程写满。100ms = 10Hz，比人眼能分辨的更细，进度条仍然跟手。
+        /// </summary>
+        private const int ProgressReportIntervalMs = 100;
+
+        /// <summary>
         /// 跑一个下载任务。由 <see cref="Scheduling.DownloadScheduler"/> 调用。
         /// </summary>
         /// <param name="job">任务描述（URL / 目标路径 / Cookie / UA / Referer / Origin / 哈希）。</param>
@@ -193,6 +200,20 @@ namespace GeZi.DownloadEngine
                 // 保证**第一个进度事件就立即上报** —— 小文件几十毫秒就下完，
                 // 如果第一次也要等满 2 秒，快照数永远是 0，车道永远空着。
                 long lastDiagMs = long.MinValue / 2;
+                // 🚨 2026-11-14：**进度上报也要节流**。
+                //
+                // 下面这条事件每个分片每读满一块（BufferBlockSize = 64KB）就触发一次。
+                // 256 路并发 × 每路几 MB/s 时是每秒上千次 —— 而 progress 是
+                // Progress<T>，每次 Report 都会 Dispatcher.Post 一个回调到 UI 线程。
+                // 实测（用户机上 3 个任务 / 256 线程）主线程 CPU 137%，
+                // 按钮点击排队几十秒都轮不到 —— 界面「点不动」就是这么来的。
+                //
+                // 界面能感知的刷新率上限就是显示器帧率，10Hz 已经比人眼分辨得更细；
+                // 这里用 100ms 而不是 2 秒（诊断用的粒度），是因为进度条要跟手。
+                // ⚠️ 阶段切换（Phase 变化）必须**立即**放行，否则「正在校验」这类
+                //    只出现一次的状态会被节流吞掉，界面停在「下载中」看着像卡死。
+                long lastProgressMs = long.MinValue / 2;
+                string lastPhase = null;
                 service.DownloadProgressChanged += (sender, e) =>
                 {
                     if (e == null)
@@ -201,23 +222,30 @@ namespace GeZi.DownloadEngine
                     }
                     if (progress != null)
                     {
-                        try
+                        long progressNowMs = diagClock.ElapsedMilliseconds;
+                        bool phaseChanged = !string.Equals(lastPhase, e.Phase, StringComparison.Ordinal);
+                        if (phaseChanged || progressNowMs - lastProgressMs >= ProgressReportIntervalMs)
                         {
-                            progress.Report(new DownloadProgress
+                            lastProgressMs = progressNowMs;
+                            lastPhase = e.Phase;
+                            try
                             {
-                                Done = e.ReceivedBytesSize,
-                                Total = e.TotalBytesToReceive,
-                                Speed = e.BytesPerSecondSpeed,
-                                // 🚨 2026-11-07：界面显示用 5 秒平滑值，调度仍用 Speed。
-                                DisplaySpeed = e.DisplaySpeed > 0 ? e.DisplaySpeed : e.BytesPerSecondSpeed,
-                                // 收尾/校验阶段没有网络流量，速度必然是 0；
-                                // 带上 Phase 让界面显示「正在校验文件完整性…」而不是卡在「下载中」。
-                                Phase = e.Phase,
-                            });
-                        }
-                        catch
-                        {
-                            // 进度回调抛异常不能影响下载本身。
+                                progress.Report(new DownloadProgress
+                                {
+                                    Done = e.ReceivedBytesSize,
+                                    Total = e.TotalBytesToReceive,
+                                    Speed = e.BytesPerSecondSpeed,
+                                    // 🚨 2026-11-07：界面显示用 5 秒平滑值，调度仍用 Speed。
+                                    DisplaySpeed = e.DisplaySpeed > 0 ? e.DisplaySpeed : e.BytesPerSecondSpeed,
+                                    // 收尾/校验阶段没有网络流量，速度必然是 0；
+                                    // 带上 Phase 让界面显示「正在校验文件完整性…」而不是卡在「下载中」。
+                                    Phase = e.Phase,
+                                });
+                            }
+                            catch
+                            {
+                                // 进度回调抛异常不能影响下载本身。
+                            }
                         }
                     }
                     if (diagnostics != null)

@@ -71,6 +71,13 @@ jobs:
           # ldd 报 "not found" 时退出码非 0，正好当断言
           ! ldd publish/GeZi.Avalonia | grep -q 'not found'
 
+      # 性能回归门禁（引擎侧，纯本地回环，不联网）：
+      #   1) ChunkDownloader 必须能退订配置事件（否则日志量随分片数无限增长）
+      #   2) 进度上报必须节流（否则每 64KB 一次 Dispatcher.Post 会写满 UI 线程）
+      # 这两个都是**数量级**问题，靠人看界面只能得出「卡」，只有计数才判得准。
+      - name: Perf regression (progress throttle + config subscription)
+        run: dotnet run --project _smoke/smoke.csproj -c Release -f net8.0 -- --perf-all
+
       # AppImage：单文件、双击即跑、无需安装 .NET。脚本内部负责 AppDir 组装、
       # 结构自检（解包后核对 apphost / libcoreclr / desktop / .DirIcon / ldd）与 SHA-256。
       # appimagetool 版本在脚本里钉死并校验哈希，不走 `continuous`。

@@ -14,7 +14,7 @@ using GeZi.DownloadEngine.Storage;
 
 namespace GeZi.DownloadEngine.Framework;
 
-internal class ChunkDownloader
+internal class ChunkDownloader : IDisposable
 {
     private readonly ILogger _logger;
     private readonly DownloadConfiguration _configuration;
@@ -45,12 +45,30 @@ internal class ChunkDownloader
 
     private void ConfigurationPropertyChanged(object sender, PropertyChangedEventArgs e)
     {
-        _logger?.LogDebug($"配置项 {e.PropertyName} 已变更");
-        if (e.PropertyName == nameof(_configuration.MaximumBytesPerSecond) &&
-            _sourceStream?.CanRead == true)
+        // 🚨 只记我们真正关心的那一个属性。
+        //
+        // 原来这里对**每个**属性变更都打一条 LogDebug。而 DownloadService 的监控线程
+        // 每 2 秒就写一次 DynamicSlowThresholdBps，配置对象被**所有**分片的
+        // ChunkDownloader 共同订阅（ctor 里 += ，却从不 -=）——
+        // 512 路并发时就是 512 × 0.5 = 256 条/秒，且每个已结束的分片仍然在订阅，
+        // 越跑越多。实测日志 158 行/秒、主线程 137% CPU，按钮点不动。
+        if (e.PropertyName == nameof(_configuration.MaximumBytesPerSecond))
         {
-            _sourceStream.BandwidthLimit = _configuration.MaximumSpeedPerChunk;
+            _logger?.LogDebug($"配置项 {e.PropertyName} 已变更");
+            if (_sourceStream?.CanRead == true)
+                _sourceStream.BandwidthLimit = _configuration.MaximumSpeedPerChunk;
         }
+    }
+
+    /// <summary>
+    /// 退订配置事件。**必须由创建方调用**：一个分片下完/失败后它的
+    /// <see cref="ChunkDownloader"/> 就该彻底断开，否则配置对象的订阅者列表
+    /// 会随分片数无限增长（每个都持有一份分片与日志回调的引用，兼带内存泄漏）。
+    /// </summary>
+    public void Dispose()
+    {
+        _configuration.PropertyChanged -= ConfigurationPropertyChanged;
+        DownloadProgressChanged = null;
     }
 
     public async Task<Chunk> Download(Request downloadRequest, PauseToken pause, CancellationToken cancelToken)
