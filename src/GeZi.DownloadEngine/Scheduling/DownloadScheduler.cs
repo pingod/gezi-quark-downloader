@@ -1,4 +1,4 @@
-// GeZi —— 多网盘下载器 (Multi-cloud downloader)
+﻿// GeZi —— 多网盘下载器 (Multi-cloud downloader)
 // Copyright (C) 2026  Yi Yuan
 //
 // This program is free software: you can redistribute it and/or modify
@@ -617,6 +617,13 @@ namespace GeZi.DownloadEngine
 
             public void Report(DownloadProgress value)
             {
+                // provider 在取链时就给出的精确大小（job.ExpectedSize）优先级高于
+                // 引擎探测到的 Total：探测可能拿到 0（服务端不给 Content-Length、
+                // 或分片响应只有 Content-Range），而取链接口给的是权威值。
+                // 只在 Total 缺失时补，绝不覆盖引擎已探到的真实值。
+                if (value != null && value.Total <= 0 && _job.ExpectedSize > 0)
+                    value.Total = _job.ExpectedSize;
+
                 _outer?.Report(new JobUpdate { Job = _job, State = JobState.Downloading, Progress = value });
             }
         }

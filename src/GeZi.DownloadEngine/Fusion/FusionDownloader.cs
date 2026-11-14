@@ -1,4 +1,4 @@
-// GeZi 鸽子下载器 — 多网盘下载器
+﻿// GeZi 鸽子下载器 — 多网盘下载器
 // Copyright (C) 2026  GeZi contributors
 //
 // 本程序是自由软件：你可以再分发和/或修改它，依据 GNU Affero 通用公共许可证
@@ -543,6 +543,31 @@ namespace GeZi.DownloadEngine
                     if (string.Equals(kv.Key, "Accept", StringComparison.OrdinalIgnoreCase)) continue;
                     request.Headers[kv.Key] = kv.Value;
                 }
+            }
+
+            // job.Headers 是**取链时随直链下发**的逐任务头（百度 BDCLND、微云临时
+            // cookie、115 禁 Cookie 规则等），优先级高于按网盘身份生成的
+            // ExtraHeaders —— 后者是"客户端档案"，前者是"这条链的门票"。
+            // 所以放在 ExtraHeaders 之后覆盖写入。
+            foreach (var kv in job.Headers)
+            {
+                if (string.IsNullOrEmpty(kv.Key)) continue;
+                if (string.Equals(kv.Key, "User-Agent", StringComparison.OrdinalIgnoreCase))
+                {
+                    request.UserAgent = kv.Value;
+                    continue;
+                }
+                if (string.Equals(kv.Key, "Referer", StringComparison.OrdinalIgnoreCase))
+                {
+                    request.Referer = kv.Value;
+                    continue;
+                }
+                if (string.Equals(kv.Key, "Accept", StringComparison.OrdinalIgnoreCase))
+                {
+                    request.Accept = kv.Value;
+                    continue;
+                }
+                request.Headers[kv.Key] = kv.Value;
             }
             request.Timeout = 15000;
 

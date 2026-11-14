@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFrameworks>net48;net8.0</TargetFrameworks>
@@ -13,6 +13,13 @@
     <Prefer32Bit>false</Prefer32Bit>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <PathMap>$(MSBuildProjectDirectory)=/_/</PathMap>
+    <!-- SYSLIB0014：引擎的数据面**刻意**建在 HttpWebRequest 上，不是遗留。
+         它需要的三件事 HttpClient 都做不到（或做起来要走反射/内部 API）：
+           · ServicePoint.BindIPEndPointDelegate —— 按对端 IP 统计与择优
+           · 每条连接独立设置 TLS 版本/超时（慢连接抢占依赖它）
+           · 直接控制 Connection 头与 KeepAlive 行为
+         换 HttpClient 等于重写传输层，不属于本次合并范围。 -->
+    <NoWarn Condition="'$(TargetFramework)' == 'net8.0'">$(NoWarn);SYSLIB0014</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

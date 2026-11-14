@@ -1,4 +1,4 @@
-// GeZi —— 多网盘下载器 (Multi-cloud downloader)
+﻿// GeZi —— 多网盘下载器 (Multi-cloud downloader)
 // Copyright (C) 2026  Yi Yuan
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published by
@@ -29,6 +29,36 @@ namespace GeZi.DownloadEngine
         public string Url { get; set; } = "";
         public string Dest { get; set; } = "";
         public string Cookie { get; set; } = "";
+
+        /// <summary>
+        /// 下载时必须额外带的请求头（按网盘差异提供）。
+        ///
+        /// <para>
+        /// 为什么必须有个**逐任务**的头字典（而不是只靠 <see cref="ExtraHeaders"/>）：
+        /// 各网盘的直链对请求头要求差异极大 ——
+        /// 百度必须带 Cookie(含 BDCLND) + Accept-Encoding:identity；
+        /// 115 只需 UA + Referer，**反而不能带登录 Cookie**；
+        /// 微云要带从响应里提取的临时 cookie。
+        /// 这些是**取链那一刻**才知道的（跟着直链一起下发），
+        /// 而 <see cref="ExtraHeaders"/> 是**按网盘身份**提前生成的客户端档案
+        /// （Sec-Ch-Ua / Sec-Fetch-*），两者来源与生命周期都不同，不能合并。
+        /// </para>
+        /// <para>
+        /// 由 Linux 分支的 17 网盘 provider 通过 <c>GetDownloadSpecAsync</c> 填充。
+        /// </para>
+        /// </summary>
+        public Dictionary<string, string> Headers { get; } =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// 预期大小（0 = 未知）。provider 能提前给出精确大小时填上，
+        /// 用于进度显示与「下完立即校验」。
+        /// <para>
+        /// 与 <c>PendingInfo.Size</c> 的区别：那是**续传记录**里的历史值，
+        /// 本字段是**本次取链**得到的当前值，优先级更高。
+        /// </para>
+        /// </summary>
+        public long ExpectedSize { get; set; }
 
         /// <summary>
         /// 下载请求的 Referer。空 = 沿用下载器的默认值（夸克）。
