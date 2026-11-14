@@ -14,7 +14,6 @@
 using System;
 using System.Net;
 using System.Threading;
-using GeZi.Core.Download;
 
 namespace GeZi.Core.Support
 {
@@ -57,7 +56,7 @@ namespace GeZi.Core.Support
                 // 关键：这里要按"单文件最大并发"来算，而不是按"全局连接预算"。
                 // 两者含义不同：前者是单个任务能开多少条连接，后者是同时下载多个
                 // 任务时的总连接上限。线程池要能立刻喂饱前者，所以取两者较大值更稳。
-                // 直接引用 SegmentedDownloader.MaxRealConcurrency（单文件并发上限），
+                // 直接引用 ChunkSplitter.MaxRealConcurrency（单文件并发上限），
                 // 保证"所有档位都能立刻拿到线程"这件事由同一个常量驱动，
                 // 不会因为改了别处而失配。
                 // 原来这里设的是 max(connBudget, 512)，理由是

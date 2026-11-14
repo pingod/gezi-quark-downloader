@@ -1,4 +1,4 @@
-using GeZi.DownloadEngine.Framework.Extensions.Helpers;
+﻿using GeZi.DownloadEngine.Framework.Extensions.Helpers;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -519,6 +519,18 @@ public class DownloadService : AbstractDownloadService
         }
         finally
         {
+            // 🚨 必须在这里取消待发的阶段文案（2026-11 修）。
+            //
+            // SchedulePhase() 是「延迟 400ms 才上报」的：快任务完全看不见，
+            // 真卡住才看得见。但**失败路径原来不清它** ——
+            // GetFileSize() 抛 412/网络错误时，计时器已经排上队，
+            // 400ms 后它照样醒来把 Phase 写进进度，而 UI 把 Phase 当作状态文案，
+            // 于是界面上一条**已经失败**的任务显示成「正在获取文件信息…」，
+            // 用户以为还在跑，其实早结束了。
+            // 放在 finally 里：成功/取消/失败三条路径都会经过，一处覆盖全部。
+            CancelScheduledPhase();
+            Package.Phase = null;
+
             await StopResumeSaverAsync().ConfigureAwait(false);
             _singleInstanceSemaphore.Release();
             await Task.Yield();

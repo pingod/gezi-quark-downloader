@@ -1,4 +1,4 @@
-// 冒烟测试：验证移植后的 Core 在 Linux 上真的能干活。
+﻿// 冒烟测试：验证移植后的 Core 在 Linux 上真的能干活。
 // 覆盖 4 件事：
 //   1) 分享链接解析（纯逻辑）
 //   2) Cookie 加密往返（net8 的 AES-GCM 分支）
@@ -10,7 +10,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using GeZi.Core.Download;
+using GeZi.DownloadEngine;
 using GeZi.Core.Support;
 using GeZi.Providers.Shared;
 
@@ -150,39 +150,51 @@ internal static class Program
         string dest = Path.Combine(dir, "README.md");
         try { if (File.Exists(dest)) File.Delete(dest); } catch { }
 
-        using (var dl = new SegmentedDownloader(threads: 4, cookie: null, partsRoot: null))
+        // 走融合引擎（与界面同一条路径）：DownloadScheduler + DownloadJob。
+        // 原来这里直接用 SegmentedDownloader.DownloadAsync —— 那是 Linux 分支
+        // 自研引擎的低层入口，现在已统一到 GeZi.DownloadEngine。
+        long lastDone = 0;
+        string failMsg = null;
+        bool completed = false;
+
+        var job = new DownloadJob
         {
-            dl.Log = msg => { };   // 静默
+            Name = "README.md",
+            Url = url,
+            Dest = dest,
+            Threads = 4,
+        };
 
-            long lastDone = 0;
-            var progress = new Progress<DownloadProgress>(p =>
-            {
-                if (p != null) lastDone = p.Done;
-            });
+        var progress = new Progress<JobUpdate>(u =>
+        {
+            if (u == null) return;
+            if (u.Progress != null) lastDone = Math.Max(lastDone, u.Progress.Done);
+            if (u.State == JobState.Completed) completed = true;
+            if (u.State == JobState.Failed) failMsg = u.Error;
+        });
 
-            DownloadResult res;
-            try
-            {
-                res = await dl.DownloadAsync(url, dest, progress, CancellationToken.None, null);
-            }
-            catch (Exception ex)
-            {
-                Check("下载不抛异常", false, ex.GetType().Name + ": " + ex.Message);
-                return;
-            }
-
-            long size = 0;
-            try { size = new FileInfo(dest).Length; } catch { }
-
-            Check("下载成功", res.Ok, res.Message);
-            Check("文件已落盘且非空", size > 0, size + " 字节");
-            Check("进度有上报", lastDone > 0, lastDone + " 字节");
-
-            // 内容抽查：README 里必然有项目名
-            string text = "";
-            try { text = File.ReadAllText(dest); } catch { }
-            Check("内容像样", text.Contains("wstream") || text.Length > 100, text.Length + " 字符");
+        using (var scheduler = new DownloadScheduler(maxConcurrent: 1))
+        {
+            scheduler.Log = msg => { };   // 静默
+            await scheduler.RunAllAsync(new[] { job }, progress, CancellationToken.None);
         }
+
+        // Progress<T> 把回调投递到线程池，RunAllAsync 返回时它可能还没跑完。
+        // 等一小会儿再断言，否则会误报「未收到 Completed」。
+        for (int i = 0; i < 40 && !completed && failMsg == null; i++)
+            await Task.Delay(50);
+
+        long size = 0;
+        try { size = new FileInfo(dest).Length; } catch { }
+
+        Check("下载成功", completed, completed ? "收到 Completed" : (failMsg ?? "(未收到 Completed)"));
+        Check("文件已落盘且非空", size > 0, size + " 字节");
+        Check("进度有上报", lastDone > 0, lastDone + " 字节");
+
+        // 内容抽查：README 里必然有项目名
+        string text = "";
+        try { text = File.ReadAllText(dest); } catch { }
+        Check("内容像样", text.Contains("wstream") || text.Length > 100, text.Length + " 字符");
     }
 
     private static void Check(string name, bool ok, string detail)

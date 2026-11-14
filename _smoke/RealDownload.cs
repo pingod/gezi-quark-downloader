@@ -8,7 +8,7 @@ using GeZi.Core.Api;
 using GeZi.Providers.Quark;
 using GeZi.Providers.Qr;
 using GeZi.Providers.Shared;
-using GeZi.Core.Download;
+using GeZi.DownloadEngine;
 using GeZi.Core.Support;
 
 internal static class RealDownload
@@ -68,16 +68,26 @@ internal static class RealDownload
         // 沙箱内必须走代理才能出网；下载器默认强制直连（那是给夸克 CDN 的正确行为）
         NetworkOptions.UseSystemProxy = true;
 
-        using (var dl = new SegmentedDownloader(threads: 8, cookie: client.CookieStr, partsRoot: null))
+        // 走融合引擎（与界面同一条路径）
+        var job = new DownloadJob
         {
-            dl.Log = msg => Console.WriteLine("      [dl] " + msg);
+            Name = file.Name,
+            Url = url,
+            Dest = dest,
+            Cookie = client.CookieStr,
+            Threads = 8,
+        };
+
+        using (var scheduler = new DownloadScheduler(maxConcurrent: 1))
+        {
+            scheduler.Log = msg => Console.WriteLine("      [dl] " + msg);
 
             // ⚠️ 不能靠 CancellationToken 限时：下载器的语义是「取消即清理」，
             //    取消会把已下载的分片和目标文件一起删掉（那是给用户点「取消」用的正确行为）。
             //    所以这里改成「跑 20 秒 → 在取消之前观察磁盘」。
             using (var cts = new CancellationTokenSource())
             {
-                var prog = new Progress<DownloadProgress>(p => { });
+                var prog = new Progress<JobUpdate>(u => { });
 
                 long observed = 0, observedParts = 0;
                 var watch = Task.Run(async () =>
@@ -100,9 +110,18 @@ internal static class RealDownload
                     cts.Cancel();      // 观察完再取消（此时数据已证明落盘）
                 });
 
-                DownloadResult res;
-                try { res = await dl.DownloadAsync(url, dest, prog, cts.Token, null); }
-                catch (OperationCanceledException) { res = new DownloadResult { Ok = false, Message = "(观察后主动取消)" }; }
+                // 观察 20 秒后取消：DownloadScheduler 走的是「取消即清理」语义，
+                // 所以先看磁盘、再取消。
+                bool ok = false;
+                string msg = "(观察后主动取消)";
+                try
+                {
+                    await scheduler.RunAllAsync(new[] { job }, prog, cts.Token);
+                    ok = true;
+                    msg = "";
+                }
+                catch (OperationCanceledException) { ok = false; }
+                var res = new DownloadResult { Ok = ok, Message = msg };
 
                 await watch;
                 long got = observed;

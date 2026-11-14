@@ -34,7 +34,7 @@ using GeZi.Providers.Quark;
 using GeZi.Providers.Qr;
 using GeZi.Providers.Shared;
 using GeZi.Providers.Cloud;
-using GeZi.Core.Download;
+using GeZi.DownloadEngine;
 using GeZi.Core.Models;
 using GeZi.Core.Support;
 
@@ -1039,6 +1039,12 @@ namespace GeZi.Avalonia
                 switch (u.State)
                 {
                     case JobState.Downloading:
+                        // 终态之后不该再被"下载中"覆盖。
+                        // 引擎的进度上报来自多个线程（阶段文案有 400ms 延迟任务），
+                        // 一条已失败/已取消的任务偶尔会收到一个迟到的 Downloading，
+                        // 把状态冲回「下载中」—— 用户看到失败原因还在、状态却在跑。
+                        // 终态一旦写入就不再接受 Downloading。
+                        if (tr.IsTerminal) break;
                         if (u.Progress != null)
                         {
                             tr.Done = u.Progress.Done;

@@ -10,5 +10,6 @@
     <ProjectReference Include="../src/GeZi.Core/GeZi.Core.csproj" />
     <!-- 17 网盘通道已随上游五层重构移到 Providers（Cloud/* 与四家官方客户端） -->
     <ProjectReference Include="../src/GeZi.Providers/GeZi.Providers.csproj" />
+    <ProjectReference Include="../src/GeZi.DownloadEngine/GeZi.DownloadEngine.csproj" />
   </ItemGroup>
 </Project>

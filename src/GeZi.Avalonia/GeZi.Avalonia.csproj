@@ -39,6 +39,10 @@
     <!-- 17 网盘通道（Cloud/*）与四家官方客户端在 Providers；
          与 WPF 版共用同一份，不另立一份 Linux 专用实现。 -->
     <ProjectReference Include="..\GeZi.Providers\GeZi.Providers.csproj" />
+    <!-- 融合下载引擎（上游 2.4.0 引入）：并发预算、写合并窗口、慢连接抢占、
+         moov 优先、续传快照。Linux 端曾用自己的 SegmentedDownloader，
+         现在统一到这一套 —— 两套引擎并存只会让修 bug 要改两遍。 -->
+    <ProjectReference Include="..\GeZi.DownloadEngine\GeZi.DownloadEngine.csproj" />
   </ItemGroup>
 
   <ItemGroup>

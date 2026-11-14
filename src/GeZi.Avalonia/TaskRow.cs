@@ -18,7 +18,7 @@ using System;
 using System.ComponentModel;
 using Avalonia.Media.Imaging;
 using GeZi.Providers.Cloud;
-using GeZi.Core.Download;
+using GeZi.DownloadEngine;
 using GeZi.Core.Models;
 
 namespace GeZi.Avalonia
@@ -328,6 +328,18 @@ namespace GeZi.Avalonia
         public bool CanPlayPartial => _state == "下载中" && Done > 0;
 
         public bool IsRunning => _state == "下载中";
+
+        /// <summary>
+        /// 是否已进入终态（失败/已取消/已完成）。
+        /// <para>
+        /// 引擎的进度回调来自多个线程，阶段文案还有个 400ms 的延迟任务；
+        /// 一条已经失败的任务偶尔会收到一个迟到的 <c>Downloading</c>，
+        /// 把状态冲回「下载中」—— 界面上失败原因还在、状态却在跑。
+        /// 终态一旦写入就不该再被进度覆盖。
+        /// </para>
+        /// </summary>
+        public bool IsTerminal =>
+            _state == "失败" || _state == "已取消" || _state == "已完成";
 
         /// <summary>下载完成后在文件管理器里打开所在目录。</summary>
         public string Dest => Job.Dest;
