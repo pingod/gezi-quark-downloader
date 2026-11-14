@@ -68,8 +68,8 @@
 | 播放器（可选） | **VLC** —— 仅边下边播功能需要 |
 | 架构 | x64 |
 
-> ⚠️ **本软件仅支持 Windows**，不支持 Linux / macOS。
-> （UI 基于 WPF、运行时为 .NET Framework，两者均为 Windows 独占。）
+> **Windows** 版为 WPF + .NET Framework 4.8；**Linux** 版是独立的 Avalonia + .NET 8 原生实现
+> （`src/GeZi.Avalonia`），共用同一套 `GeZi.Core` 与网盘通道，以 AppImage 分发。macOS 未支持。
 
 ---
 
@@ -125,6 +125,27 @@ python tools/package_release.py --from-build --out artifacts
 - `tests/GeZi.SelfTest`：覆盖连接预算分配、路径预检、慢连接看门狗、DPAPI 加解密、残留清理、诊断包。
 - `.github/workflows/build.yml`：CI 门禁 = 0 警告 0 错误 + 自测全过 + 可打包。
 - 详细说明见 [docs/TESTING.md](docs/TESTING.md) 与 [docs/RELEASE-CHECKLIST.md](docs/RELEASE-CHECKLIST.md)。
+
+### 方式四：Linux 原生版（AppImage）
+
+```bash
+# 1. 自包含发布（不依赖系统 dotnet）
+dotnet publish src/GeZi.Avalonia/GeZi.Avalonia.csproj -c Release -f net8.0 \
+  -r linux-x64 --self-contained true -o publish
+
+# 2. 打成单文件 AppImage（内含结构自检与 SHA-256）
+tools/package_appimage.sh --publish-dir publish --out artifacts
+
+# 3. 或直接跑目录版的自检（不开界面）
+GEZI_CONFIG_DIR=/tmp/gezi-cfg ./publish/GeZi.Avalonia --selftest
+```
+
+- 产物：`GeZi-v<版本>-x86_64.AppImage`（约 38 MB，`chmod +x` 后双击即用）+ `.sha256`。
+- `tools/package_appimage.sh` 用钉死版本并校验 SHA-256 的 `appimagetool`，剔除 PDB，
+  解包回验 apphost / `libcoreclr.so` / desktop / `.DirIcon` / `ldd`。
+- `.github/workflows/linux.yml`：每次 push/PR 构建并上传 AppImage + tar.gz 产物。
+- `.github/workflows/release.yml`：打 `v*` tag 即构建并发布到 GitHub Release
+  （校验 tag 与 `GeZi.Avalonia.csproj`、`app.manifest` 的版本号一致）。
 
 ---
 

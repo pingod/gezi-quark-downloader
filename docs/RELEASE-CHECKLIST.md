@@ -52,3 +52,20 @@ python tools/package_release.py --from-build --out artifacts
 
 - [ ] 保留上一版 zip 与哈希，出现严重回归时能直接撤回 Release。
 - [ ] 版本号只增不减；修复版走 patch 号（例如 2.3.2）。
+
+## 7. Linux（AppImage）
+
+发版由 `.github/workflows/release.yml` 在打 `v*` tag 时自动完成，人工只需核对：
+
+- [ ] `src/GeZi.Avalonia/GeZi.Avalonia.csproj` 的 `<Version>` 与 tag 一致
+      （CI 会比对，不一致直接失败）。
+- [ ] `src/GeZi.Avalonia/app.manifest` 的 `assemblyIdentity version` 同步到同一版本。
+- [ ] Release 资产齐全：`GeZi-v<版本>-x86_64.AppImage`、`.sha256`、
+      `GeZi-linux-x64.tar.gz`、`.tar.gz.sha256`。
+- [ ] Release 说明里的 SHA-256 与资产文件内容一致（说明由 CI 从 `.sha256` 生成）。
+- [ ] AppImage 内不含 PDB（`tools/package_appimage.sh` 会剔除，可解包复核）。
+
+> 本地复现同一条链路：
+> `dotnet publish src/GeZi.Avalonia/GeZi.Avalonia.csproj -c Release -f net8.0 -r linux-x64 --self-contained true -o publish`
+> 然后 `tools/package_appimage.sh --publish-dir publish --out artifacts`。
+> 脚本用钉死版本 + SHA-256 校验的 `appimagetool`（1.9.1），不使用 `continuous`。

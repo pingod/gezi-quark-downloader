@@ -29,6 +29,7 @@ AGENTS.md
 
 # ---------- 发布打包与自测临时产物 ----------
 artifacts/
+publish/
 gezi-selftest-*/
 
 # ---------- 构建产物 ----------

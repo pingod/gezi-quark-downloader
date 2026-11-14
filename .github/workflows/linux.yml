@@ -71,6 +71,12 @@ jobs:
           # ldd 报 "not found" 时退出码非 0，正好当断言
           ! ldd publish/GeZi.Avalonia | grep -q 'not found'
 
+      # AppImage：单文件、双击即跑、无需安装 .NET。脚本内部负责 AppDir 组装、
+      # 结构自检（解包后核对 apphost / libcoreclr / desktop / .DirIcon / ldd）与 SHA-256。
+      # appimagetool 版本在脚本里钉死并校验哈希，不走 `continuous`。
+      - name: Package (AppImage)
+        run: tools/package_appimage.sh --publish-dir publish --out artifacts
+
       - name: Package (tar.gz + SHA256)
         run: |
           set -e
@@ -89,6 +95,8 @@ jobs:
         with:
           name: GeZi-linux-x64
           path: |
+            artifacts/GeZi-*-x86_64.AppImage
+            artifacts/GeZi-*-x86_64.AppImage.sha256
             artifacts/GeZi-linux-x64.tar.gz
             artifacts/GeZi-linux-x64.tar.gz.sha256
           if-no-files-found: error
