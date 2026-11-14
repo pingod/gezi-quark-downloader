@@ -1,6 +1,6 @@
-using System;
+﻿using System;
 using System.Linq;
-using GeZi.Core.Cloud;
+using GeZi.Providers.Cloud;
 
 internal static class PlatformTests
 {

@@ -1,7 +1,10 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Threading.Tasks;
 using GeZi.Core.Api;
+using GeZi.Providers.Quark;
+using GeZi.Providers.Qr;
+using GeZi.Providers.Shared;
 using GeZi.Core.Support;
 
 internal static class LoginProbe

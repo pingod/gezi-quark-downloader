@@ -1,7 +1,7 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net48</TargetFramework>
+    <TargetFrameworks>net48;net8.0</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <AssemblyName>GeZi.Providers</AssemblyName>
@@ -20,7 +20,7 @@
     <ProjectReference Include="..\GeZi.Core\GeZi.Core.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
     <Reference Include="System.Net.Http" />
     <!-- JSON：与 Core 一致用框架自带 JavaScriptSerializer -->
     <Reference Include="System.Web.Extensions" />
@@ -30,7 +30,18 @@
     <Reference Include="System.Security" />
   </ItemGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <!-- 二维码解码走 NuGet 版（netstandard2.0 目标提供纯字节 RGBLuminanceSource，
+         不碰 System.Drawing —— 那套在 Linux 上不可用）。
+         与 GeZi.Core 的 net8.0 分支固定同一版本，避免解析出两份 native 库。 -->
+    <PackageReference Include="ZXing.Net" Version="0.16.10" />
+    <PackageReference Include="SkiaSharp" Version="3.119.4" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="3.119.4" />
+    <!-- Cloud 层的图片解码（Support/ImageLoader 在 Core，此处只保证版本一致） -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
     <!-- ★ 二维码解码：ZXing.Net（Apache-2.0）。只有 QrDecoder 用它，所以跟着本项目的 Qr 目录走。 -->
     <Reference Include="ZXing">
       <HintPath>lib\ZXing\zxing.dll</HintPath>

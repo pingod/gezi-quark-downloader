@@ -1,4 +1,4 @@
-// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
+﻿// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
 // Copyright (C) 2026  Yi Yuan
 //
 // This program is free software: you can redistribute it and/or modify
@@ -22,6 +22,9 @@ using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.VisualTree;
 using GeZi.Core.Api;
+using GeZi.Providers.Quark;
+using GeZi.Providers.Qr;
+using GeZi.Providers.Shared;
 using GeZi.Core.Support;
 
 namespace GeZi.Avalonia

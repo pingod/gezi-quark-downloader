@@ -1,32 +1,42 @@
-﻿// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
+// GeZi —— 多网盘下载器 (Multi-cloud downloader)
 // Copyright (C) 2026  Yi Yuan
 // This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
+// it under the terms of the GNU Affero General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// GNU Affero General Public License for more details.
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/agpl-3.0>.
 
 namespace GeZi.Core.Support
 {
-    /// <summary>夸克网页端公开接口的常量，全部来自原 Python 核心里已验证的取值。</summary>
+    /// <summary>
+    /// 夸克网页端公开接口的常量，全部来自原 Python 核心里已验证的取值。
+    /// <para>
+    /// ⚠️ <b>它为什么留在 GeZi.Core 而不是 GeZi.Providers：</b>
+    /// 除了夸克 API 常量，<c>DlUa</c> / <c>Referer</c> / <c>Origin</c> 这三个值
+    /// 还被下载引擎（<c>SegmentedDownloader</c>、<c>DownloadScheduler</c>）当作
+    /// **中性的默认请求头**使用 —— 引擎在调用方没指定 UA/Referer 时就退回这三个值。
+    /// 若把它挪进 Providers，Core 就必须反向引用 Providers（循环依赖）。
+    /// 将来若要让引擎彻底不认识"夸克"，应把这几个默认值抽成
+    /// <c>DownloadDefaults</c> 之类的独立类，届时本文件才可整体移走。
+    /// </para>
+    /// </summary>
     public static class QuarkConstants
     {
         public const string ApiBase = "https://drive-pc.quark.cn";
-
-        /// <summary>UC 网盘的 API 基址（与夸克同构，仅域名与 product 不同）。</summary>
-        public const string UcApiBase = "https://pc-api.uc.cn";
-
-        /// <summary>UC 网盘的站点来源（Referer/Origin 用）。</summary>
-        public const string UcOrigin = "https://drive.uc.cn";
-
-        /// <summary>UC 网盘的 pr 参数（夸克是 ucpro）。</summary>
-        public const string UcProduct = "UCBrowser";
         public const string AccountUrl = "https://pan.quark.cn/account/info";
+
+        /// <summary>
+        /// 会话刷新接口：去掉 <c>__puus</c> 请求它，服务端会在 <c>Set-Cookie</c>
+        /// 里重新下发新鲜的 <c>__puus</c>。与 UC 的
+        /// <see cref="UcConstants.ConfigUrl"/> 同款机制（见 YunX
+        /// <c>QuarkApi.refreshPuus</c>）。
+        /// </summary>
+        public const string ConfigUrl = "https://drive-pc.quark.cn/1/clouddrive/config?pr=ucpro&fr=pc";
         public const string Referer = "https://pan.quark.cn/";
         public const string Origin = "https://pan.quark.cn";
 

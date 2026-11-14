@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using GeZi.Core.Download;
 using GeZi.Core.Support;
+using GeZi.Providers.Shared;
 
 internal static class Program
 {

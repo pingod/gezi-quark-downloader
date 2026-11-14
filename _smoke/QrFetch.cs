@@ -1,6 +1,9 @@
-using System;
+﻿using System;
 using System.Threading.Tasks;
 using GeZi.Core.Api;
+using GeZi.Providers.Quark;
+using GeZi.Providers.Qr;
+using GeZi.Providers.Shared;
 
 internal static class QrFetch
 {

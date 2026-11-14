@@ -1,8 +1,8 @@
-// 多网盘架构测试：验证链接识别、平台能力、provider 分发
+﻿// 多网盘架构测试：验证链接识别、平台能力、provider 分发
 using System;
 using System.Linq;
-using GeZi.Core.Cloud;
-using GeZi.Core.Cloud.Providers;
+using GeZi.Providers.Cloud;
+using GeZi.Providers.Cloud.Providers;
 
 internal static class CloudTests
 {

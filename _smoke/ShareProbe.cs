@@ -1,6 +1,9 @@
-using System;
+﻿using System;
 using System.Threading.Tasks;
 using GeZi.Core.Api;
+using GeZi.Providers.Quark;
+using GeZi.Providers.Qr;
+using GeZi.Providers.Shared;
 
 internal static class ShareProbe
 {
@@ -10,7 +13,7 @@ internal static class ShareProbe
         Console.WriteLine();
         Console.WriteLine("[7] 真实分享链路");
 
-        var info = GeZi.Core.Support.ShareUrlParser.Parse(shareUrl);
+        var info = GeZi.Providers.Shared.ShareUrlParser.Parse(shareUrl);
         Console.WriteLine("    pwd_id   = " + (info.PwdId ?? "(未识别)"));
         Console.WriteLine("    passcode = " + (string.IsNullOrEmpty(info.Passcode) ? "(无)" : info.Passcode));
         if (string.IsNullOrEmpty(info.PwdId)) { Console.WriteLine("    ✗ 链接无法解析"); return; }

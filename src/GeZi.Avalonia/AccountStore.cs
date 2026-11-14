@@ -53,7 +53,7 @@ namespace GeZi.Avalonia
 
         /// <summary>平台显示名（界面用）。</summary>
         public string PlatformLabel =>
-            Core.Cloud.CloudPlatform.FromKey(Platform)?.ShortName ?? Platform ?? "";
+            Providers.Cloud.CloudPlatform.FromKey(Platform)?.ShortName ?? Platform ?? "";
     }
 
     /// <summary>

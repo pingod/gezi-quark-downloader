@@ -1,5 +1,8 @@
-using System;
+﻿using System;
 using GeZi.Core.Api;
+using GeZi.Providers.Quark;
+using GeZi.Providers.Qr;
+using GeZi.Providers.Shared;
 using GeZi.Core.Support;
 
 internal static class QrProbe

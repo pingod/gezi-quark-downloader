@@ -1,6 +1,9 @@
-using System;
+﻿using System;
 using System.Threading.Tasks;
 using GeZi.Core.Api;
+using GeZi.Providers.Quark;
+using GeZi.Providers.Qr;
+using GeZi.Providers.Shared;
 
 internal static class DirProbe
 {
@@ -8,7 +11,7 @@ internal static class DirProbe
     {
         Console.WriteLine();
         Console.WriteLine("[9] 进入子目录查看内容");
-        var info = GeZi.Core.Support.ShareUrlParser.Parse(shareUrl);
+        var info = GeZi.Providers.Shared.ShareUrlParser.Parse(shareUrl);
         var client = new QuarkClient("");
         string stoken = await client.GetStokenAsync(info.PwdId, info.Passcode ?? "");
         var root = await client.ShareDetailPageAsync(info.PwdId, stoken, "0", 1);

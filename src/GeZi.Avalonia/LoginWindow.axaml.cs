@@ -19,6 +19,8 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using GeZi.Core.Support;
+using GeZi.Providers.Quark;
+using GeZi.Providers.Shared;
 
 namespace GeZi.Avalonia
 {

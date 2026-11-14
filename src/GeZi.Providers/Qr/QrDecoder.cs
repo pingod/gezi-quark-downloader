@@ -136,12 +136,7 @@ namespace GeZi.Providers.Qr
             }
             catch (Exception ex)
             {
-                // 位图已经建出来了（只是后续步骤失败）→ 必须自己释放，否则整张图的内存挂着直到 GC。
-                if (bmp != null)
-                {
-                    try { bmp.Dispose(); } catch { }
-                    bmp = null;
-                }
+                // 这里只是读文件失败，还没有任何位图被创建 —— 不需要（也无法）释放。
                 return Fail("图片读取失败：" + ex.Message);
             }
             return DecodeBytes(bytes);

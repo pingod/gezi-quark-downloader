@@ -1,6 +1,9 @@
-using System.Linq;
+﻿using System.Linq;
 using System;
 using GeZi.Core.Api;
+using GeZi.Providers.Quark;
+using GeZi.Providers.Qr;
+using GeZi.Providers.Shared;
 
 internal static class ErrorRoutingTests
 {

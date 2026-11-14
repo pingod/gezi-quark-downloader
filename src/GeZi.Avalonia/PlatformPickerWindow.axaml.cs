@@ -1,4 +1,4 @@
-// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
+﻿// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
 // Copyright (C) 2026  Yi Yuan
 // GPL-3.0-or-later — 详见仓库根目录 LICENSE
 
@@ -9,7 +9,7 @@ using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
-using GeZi.Core.Cloud;
+using GeZi.Providers.Cloud;
 
 namespace GeZi.Avalonia
 {

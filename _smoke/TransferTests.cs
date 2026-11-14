@@ -1,9 +1,9 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using GeZi.Core.Cloud;
+using GeZi.Providers.Cloud;
 
 internal static class TransferTests
 {

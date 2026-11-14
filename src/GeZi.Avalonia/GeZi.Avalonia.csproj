@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <!-- Linux / macOS 原生图形界面（Avalonia 12）。
        与 Windows 的 WPF 版（src/GeZi）并列存在，共用同一份 GeZi.Core：
@@ -36,6 +36,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\GeZi.Core\GeZi.Core.csproj" />
+    <!-- 17 网盘通道（Cloud/*）与四家官方客户端在 Providers；
+         与 WPF 版共用同一份，不另立一份 Linux 专用实现。 -->
+    <ProjectReference Include="..\GeZi.Providers\GeZi.Providers.csproj" />
   </ItemGroup>
 
   <ItemGroup>

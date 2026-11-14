@@ -120,6 +120,22 @@ namespace GeZi.Providers.Quark
         public string CookieStr => _session.BuildCookieString();
 
         /// <summary>
+        /// 上一次分享取链"失败但不是错误"的原因说明。
+        ///
+        /// <para>
+        /// 场景：接口返回 31001/23018（需登录/受限）时，直链确实拿不到，
+        /// 但这不是"出错"——正确做法是改走转存。此时方法返回 null 而不是抛异常，
+        /// 由这个属性带上人类可读的原因，供界面提示用户。
+        /// </para>
+        /// <para>
+        /// ⚠️ 上游 2.4.0 重构时这个属性被去掉了，但 <c>GeZi.Providers.Cloud</c>
+        /// 的 <c>QuarkProvider</c> 依赖它区分「取不到」与「失败」，
+        /// 去掉会让"需登录"的分享被当成错误弹给用户。所以保留。
+        /// </para>
+        /// </summary>
+        public string ShareDirectUnavailableReason { get; private set; } = "";
+
+        /// <summary>
         /// 取链接口的查询参数：以 <see cref="PanClientProfile"/> 里的客户端档案为底
         /// （pr / fr / sys / ve），再叠加本入口的差异化参数（entry / fr 变体 / uc_param_str）。
         ///
@@ -1204,7 +1220,7 @@ namespace GeZi.Providers.Quark
                 throw new QuarkApiException("重命名失败: 新名称为空");
 
             var res = await RequestAsync(HttpMethod.Post, _apiBase + "/1/clouddrive/file/rename",
-                new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" } },
+                new Dictionary<string, string> { { "pr", _pr }, { "fr", "pc" }, { "uc_param_str", "" } },
                 new { fid, file_name = newName });
             Check(res, "重命名");
         }
@@ -1217,7 +1233,7 @@ namespace GeZi.Providers.Quark
             if (fids == null || fids.Count == 0) return;
 
             var res = await RequestAsync(HttpMethod.Post, _apiBase + "/1/clouddrive/file/move",
-                new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" } },
+                new Dictionary<string, string> { { "pr", _pr }, { "fr", "pc" }, { "uc_param_str", "" } },
                 new
                 {
                     action_type = 1,
@@ -1253,7 +1269,7 @@ namespace GeZi.Providers.Quark
                 // file/info/path_list 能一次拿到该项的 path 信息
                 var res = await RequestAsync(HttpMethod.Post,
                     _apiBase + "/1/clouddrive/file/info/path_list",
-                    new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" } },
+                    new Dictionary<string, string> { { "pr", _pr }, { "fr", "pc" } },
                     new { fid = new[] { cur }, _page = 1, _size = 50 });
 
                 Check(res, "查询文件路径");
@@ -1296,7 +1312,7 @@ namespace GeZi.Providers.Quark
 
             var res = await RequestAsync(HttpMethod.Post,
                 _apiBase + "/1/clouddrive/share/create",
-                new Dictionary<string, string> { { "pr", _product }, { "fr", "pc" }, { "uc_param_str", "" } },
+                new Dictionary<string, string> { { "pr", _pr }, { "fr", "pc" }, { "uc_param_str", "" } },
                 new
                 {
                     fid_list = fids,

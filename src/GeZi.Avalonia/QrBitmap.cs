@@ -19,6 +19,7 @@ using Avalonia;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using GeZi.Core.Support;
+using GeZi.Providers.Qr;
 
 namespace GeZi.Avalonia
 {
