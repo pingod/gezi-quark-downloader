@@ -54,7 +54,6 @@ namespace GeZi.Core.Api
                 return ToPlain(JsonDocument.Parse(json).RootElement);
 #else
                 return new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.DeserializeObject(json);
-            }
 #endif
             }
             catch

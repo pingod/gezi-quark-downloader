@@ -22,6 +22,13 @@
          不加 → `C:\Users\<用户名>\Desktop\GeZi\src\...\GeZi.Core.pdb` 被写进 dll
          → 打包发给别人时泄漏本机用户名/目录（本轮实测发现）。详见 GeZi.csproj 里的说明。 -->
     <PathMap>$(MSBuildProjectDirectory)=/_/</PathMap>
+    <!-- SYSLIB0014：`ServicePointManager.FindServicePoint` 在 net8.0 被标记过时。
+         本文件里的用法是给 HttpWebRequest 的 ServicePoint 挂 BindIPEndPointDelegate，
+         用来统计「同一域名的多个对端 IP」—— 那是**诊断**用途，且下载数据面本身
+         走 HttpWebRequest（net48 路径的既有实现）。换成 HttpClient 等于重写整个
+         自研引擎的连接统计，不属于本次合并范围。
+         net48 侧没有这条分析器规则，所以只在 net8.0 下抑制。 -->
+    <NoWarn Condition="'$(TargetFramework)' == 'net8.0'">$(NoWarn);SYSLIB0014</NoWarn>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">

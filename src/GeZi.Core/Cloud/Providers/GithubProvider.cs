@@ -1,4 +1,4 @@
-// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
+﻿// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
 // Copyright (C) 2026  Yi Yuan
 // GPL-3.0-or-later — 详见仓库根目录 LICENSE
 
@@ -28,6 +28,9 @@ namespace GeZi.Core.Cloud.Providers
     /// 但分享 ID 解析对 GitHub 无意义（没有 /s/xxx），所以在
     /// <see cref="OpenShareAsync"/> 里改从 URL 直接抽 owner/repo。
     /// </summary>
+    // CS1998：GitHub 的"打开会话"只是把 URL 拆成 owner/repo/ref/path，
+    // 真正的 HTTP 都在 Browse/Download 阶段才发生。保留 async 的理由同上。
+#pragma warning disable CS1998
     public sealed class GithubProvider : CloudProviderBase
     {
         public override CloudPlatform Platform => CloudPlatform.Github;

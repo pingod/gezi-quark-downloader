@@ -1,4 +1,4 @@
-// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
+﻿// GeZi —— 夸克网盘下载器 (Quark netdisk downloader)
 // Copyright (C) 2026  Yi Yuan
 // GPL-3.0-or-later — 详见仓库根目录 LICENSE
 
@@ -28,6 +28,12 @@ namespace GeZi.Core.Cloud.Providers
     /// 个人盘需要登录 Cookie（ylogin + phpdisk_info），列目录走 web 后端，
     /// 接口易变，因此未实现时给出明确提示而不是假成功。
     /// </summary>
+    // CS1998：接口签名是 `Task<T>`，但这几家的"打开分享/取账号"是**纯本地解析**
+    // （蓝奏云的分享 ID 直接从 URL 抠，不联网），没有可 await 的东西。
+    // 保留 `async` 是刻意的：异常会以 faulted Task 形式返回，
+    // 与其它 provider 的错误传递方式一致；去掉 async 会变成**同步抛出**，
+    // 调用方的 `await` 就捕不到它了。所以这里抑制警告，不改语义。
+#pragma warning disable CS1998
     public sealed class LanzouProvider : CloudProviderBase
     {
         public override CloudPlatform Platform => CloudPlatform.Lanzou;
@@ -267,6 +273,10 @@ namespace GeZi.Core.Cloud.Providers
     /// 本实现覆盖「分享取链」（最常用），个人盘浏览需要 session，
     /// 端点参数易变，未实现时明确提示。
     /// </summary>
+#pragma warning restore CS1998
+
+    // 同上：城通的分享/登录态解析也是本地完成的。
+#pragma warning disable CS1998
     public sealed class CtfileProvider : TokenCloudProviderBase
     {
         public override CloudPlatform Platform => CloudPlatform.Ctfile;

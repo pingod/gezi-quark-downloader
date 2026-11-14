@@ -78,7 +78,10 @@ jobs:
           cp LICENSE THIRD-PARTY-NOTICES.md artifacts/ 2>/dev/null || true
           cp -r publish artifacts/GeZi-linux-x64
           tar -C artifacts -czf artifacts/GeZi-linux-x64.tar.gz GeZi-linux-x64
-          cd artifacts && sha256sum GeZi-linux-x64.tar.gz > GeZi-linux-x64.tar.gz.sha256
+          # ⚠️ 用绝对路径，不要 cd 之后再引用相对路径（第一版就是 cd 进 artifacts
+          #    又 ls artifacts，导致 "cannot access 'artifacts'"）
+          sha256sum artifacts/GeZi-linux-x64.tar.gz | sed 's|artifacts/||' \
+            > artifacts/GeZi-linux-x64.tar.gz.sha256
           ls -lh artifacts
 
       - name: Upload artifact
