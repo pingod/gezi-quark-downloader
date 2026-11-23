@@ -439,22 +439,23 @@ public class ConcurrentStream : TaskStateManagement, IDisposable
         return a.EndOffset.CompareTo(b.EndOffset);
     }
 
-    private async Task WriteSegmentAsync(long position, byte[] data, int offset, int length)
+    private Task WriteSegmentAsync(long position, byte[] data, int offset, int length)
     {
         // 🚨 _stream（FileStream）不是线程安全的，必须把「定位 + 写」和 FlushAsync 串行化。
         // 2026-10-24 实测：续传保存器每 3 秒调一次 Storage.FlushAsync()，
         // 而 Watcher 线程同时在写同一个 FileStream 的 1MB 缓冲区 ——
         // 并发 Flush/Write 会把缓冲区内容写错位置，表现为「长度对、内容错一块」，
         // 且只在共写模式出现（顺序写模式所有 I/O 都在同一把 _gate 锁里）。
-        // 锁内不能有 await（Monitor 不能跨 await），所以这里改成同步写：
-        // Watcher 本来就是独占的 LongRunning 线程，同步写反而更快。
+        // 锁内不能有 await（Monitor 不能跨 await），所以这里是同步写，
+        // 返回已完成的 Task 只为保持调用点写法：Watcher 本来就是独占的
+        // LongRunning 线程，同步写反而更快。
         lock (_streamLock)
         {
             _stream.Seek(position, SeekOrigin.Begin);
             _stream.Write(data, offset, length);
         }
 
-        return;
+        return Task.CompletedTask;
     }
 
     public long Seek(long offset, SeekOrigin origin)

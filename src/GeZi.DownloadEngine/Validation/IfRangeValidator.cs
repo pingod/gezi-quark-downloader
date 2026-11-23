@@ -209,7 +209,7 @@ public sealed class IfRangeValidator : IContentValidator
     /// <summary>
     /// 创建哈希实例。
     /// <para>
-    /// 🚨 2026-11-14：**必须用 CryptoServiceProvider 系列，不能用 <c>SHA256.Create()</c>**。
+    /// 🚨 2026-11-14：**net48 上必须用 CryptoServiceProvider 系列，不能用 <c>SHA256.Create()</c>**。
     /// </para>
     /// <para>
     /// <c>SHA256.Create()</c> 在 .NET Framework 上返回的是 <c>SHA256Managed</c> —— 纯托管实现，
@@ -221,9 +221,14 @@ public sealed class IfRangeValidator : IContentValidator
     /// 不涉及密钥派生，完全满足。算法结果与托管实现**逐位一致**（都是标准 SHA-256），
     /// 所以不会改变任何校验判定。
     /// </para>
+    /// <para>
+    /// net8.0 上这些类型被标记过时（SYSLIB0021），而且 <c>SHA256.Create()</c> 本来就返回
+    /// 平台优化实现（Linux 走 OpenSSL，Windows 走 CNG），性能一样，所以只在 net48 分支使用旧类型。
+    /// </para>
     /// </summary>
     private static HashAlgorithm CreateHash(string algorithm)
     {
+#if NETFRAMEWORK
         switch (algorithm)
         {
             case "SHA-256":
@@ -233,6 +238,17 @@ public sealed class IfRangeValidator : IContentValidator
             default:
                 return new MD5CryptoServiceProvider();
         }
+#else
+        switch (algorithm)
+        {
+            case "SHA-256":
+                return SHA256.Create();
+            case "SHA-1":
+                return SHA1.Create();
+            default:
+                return MD5.Create();
+        }
+#endif
     }
 
     private static bool IsWeakEtag(string etag)
