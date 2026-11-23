@@ -1,0 +1,66 @@
+# Arch Linux 包描述文件（pacman 格式）。
+#
+# 由 tools/package_arch.sh 使用：脚本把本文件复制到临时目录，
+# 用实际版本替换 @VERSION@，把 dotnet publish 的输出放在同级的 publish/，
+# 然后调用 makepkg。**不要直接把本文件拿去 makepkg**（@VERSION@ 未替换）。
+#
+# 设计取舍：
+#   · 自包含发布（--self-contained true）→ 不依赖 dotnet-runtime，装完即用。
+#   · 装在 /opt/gezi，/usr/bin 只放一个软链：自包含目录里有 190+ 个文件，
+#     散进 /usr/lib 既难卸载，也会和系统文件混在一起。
+#   · !strip / !debug：这是已发布的二进制，strip 不会变小多少，
+#     却可能破坏 .NET 的单文件/符号布局；调试符号本来就不进包。
+#   · 不带 PDB（含编译机路径），脚本负责剔除。
+
+pkgname=gezi-downloader
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='鸽子下载 — 夸克 / UC / 阿里云盘 / 迅雷云盘 多网盘下载器（Linux 原生版，免安装运行时）'
+arch=('x86_64')
+url='https://github.com/pingod/gezi-quark-downloader'
+license=('AGPL-3.0-only')
+depends=(
+  'glibc'
+  'gcc-libs'
+  'icu'
+  'openssl'
+  'zlib'
+  'fontconfig'
+  'freetype2'
+  'libx11'
+  'libxcb'
+  'libxcursor'
+  'libxext'
+  'libxfixes'
+  'libxi'
+  'libxrandr'
+  'libice'
+  'libsm'
+  'libglvnd'
+  'libdrm'
+)
+options=('!strip' '!debug' '!emptydirs')
+source=()
+sha256sums=()
+
+package() {
+  local _appdir="$pkgdir/opt/gezi"
+
+  install -d "$_appdir"
+  cp -a "$startdir/publish/." "$_appdir/"
+  find "$_appdir" -type f -name '*.pdb' -delete
+  chmod 0755 "$_appdir/GeZi.Avalonia"
+
+  install -d "$pkgdir/usr/bin"
+  ln -s /opt/gezi/GeZi.Avalonia "$pkgdir/usr/bin/gezi-downloader"
+
+  install -Dm644 "$startdir/gezi.desktop" \
+    "$pkgdir/usr/share/applications/gezi.desktop"
+  install -Dm644 "$startdir/gezi.png" \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/gezi.png"
+
+  install -Dm644 "$startdir/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "$startdir/THIRD-PARTY-NOTICES.md" \
+    "$pkgdir/usr/share/licenses/$pkgname/THIRD-PARTY-NOTICES.md"
+}

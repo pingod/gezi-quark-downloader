@@ -136,11 +136,16 @@ dotnet publish src/GeZi.Avalonia/GeZi.Avalonia.csproj -c Release -f net8.0 \
 # 2. 打成单文件 AppImage（内含结构自检与 SHA-256）
 tools/package_appimage.sh --publish-dir publish --out artifacts
 
-# 3. 或直接跑目录版的自检（不开界面）
+# 3. 或打成 Arch Linux 包（pacman -U 安装；非 Arch 机器自动用 docker 跑 makepkg）
+tools/package_arch.sh --publish-dir publish --out artifacts
+
+# 4. 或直接跑目录版的自检（不开界面）
 GEZI_CONFIG_DIR=/tmp/gezi-cfg ./publish/GeZi.Avalonia --selftest
 ```
 
 - 产物：`GeZi-v<版本>-x86_64.AppImage`（约 38 MB，`chmod +x` 后双击即用）+ `.sha256`。
+- Arch 产物：`gezi-downloader-<版本>-1-x86_64.pkg.tar.zst`（约 37 MB，装到 `/opt/gezi`，
+  `/usr/bin/gezi-downloader` 为启动入口）+ `.sha256`。
 - `tools/package_appimage.sh` 用钉死版本并校验 SHA-256 的 `appimagetool`，剔除 PDB，
   解包回验 apphost / `libcoreclr.so` / desktop / `.DirIcon` / `ldd`。
 - `.github/workflows/linux.yml`：每次 push/PR 构建并上传 AppImage + tar.gz 产物。

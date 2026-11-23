@@ -103,6 +103,12 @@ jobs:
             > artifacts/GeZi-linux-x64.tar.gz.sha256
           ls -lh artifacts
 
+      # Arch 包：pacman 可直接 -U 安装，自包含运行时。
+      # 打包脚本要 makepkg；ubuntu runner 没有，脚本会自动走
+      # archlinux:base-devel 容器（runner 自带 docker）。
+      - name: Package (Arch pkg.tar.zst)
+        run: tools/package_arch.sh --publish-dir publish --out artifacts
+
       # 发布说明从 git 历史生成：tag 之间的提交标题就是变更列表。
       # 不写「本次优化了性能」这种无法复核的话 —— 用户能对着 commit 核对。
       - name: Build release notes
@@ -115,6 +121,8 @@ jobs:
           APPIMAGE="$(basename artifacts/GeZi-*-x86_64.AppImage)"
           APP_SHA="$(cut -d' ' -f1 "artifacts/$APPIMAGE.sha256")"
           TAR_SHA="$(cut -d' ' -f1 artifacts/GeZi-linux-x64.tar.gz.sha256)"
+          ARCHPKG="$(basename artifacts/gezi-downloader-*-x86_64.pkg.tar.zst)"
+          ARCH_SHA="$(cut -d' ' -f1 "artifacts/$ARCHPKG.sha256")"
 
           {
             echo "## 鸽子下载 ${TAG} — Linux 原生版"
@@ -136,10 +144,12 @@ jobs:
             echo "| 文件 | 说明 |"
             echo "|---|---|"
             echo "| \`$APPIMAGE\` | 单文件 AppImage，免安装 |"
+            echo "| \`$ARCHPKG\` | Arch Linux 包（\`sudo pacman -U $ARCHPKG\`） |"
             echo "| \`GeZi-linux-x64.tar.gz\` | 自包含目录，解压即用（适合自己做启动器/装到 /opt） |"
             echo
             echo "\`\`\`"
             echo "sha256  $APP_SHA  $APPIMAGE"
+            echo "sha256  $ARCH_SHA  $ARCHPKG"
             echo "sha256  $TAR_SHA  GeZi-linux-x64.tar.gz"
             echo "\`\`\`"
             echo
@@ -167,6 +177,8 @@ jobs:
             gh release upload "$TAG" \
               artifacts/GeZi-*-x86_64.AppImage \
               artifacts/GeZi-*-x86_64.AppImage.sha256 \
+              artifacts/gezi-downloader-*-x86_64.pkg.tar.zst \
+              artifacts/gezi-downloader-*-x86_64.pkg.tar.zst.sha256 \
               artifacts/GeZi-linux-x64.tar.gz \
               artifacts/GeZi-linux-x64.tar.gz.sha256 \
               --clobber
@@ -175,6 +187,8 @@ jobs:
             gh release create "$TAG" \
               artifacts/GeZi-*-x86_64.AppImage \
               artifacts/GeZi-*-x86_64.AppImage.sha256 \
+              artifacts/gezi-downloader-*-x86_64.pkg.tar.zst \
+              artifacts/gezi-downloader-*-x86_64.pkg.tar.zst.sha256 \
               artifacts/GeZi-linux-x64.tar.gz \
               artifacts/GeZi-linux-x64.tar.gz.sha256 \
               --title "鸽子下载 ${TAG} — Linux 原生版" \

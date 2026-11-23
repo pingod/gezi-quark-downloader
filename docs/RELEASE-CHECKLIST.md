@@ -61,7 +61,8 @@ python tools/package_release.py --from-build --out artifacts
       （CI 会比对，不一致直接失败）。
 - [ ] `src/GeZi.Avalonia/app.manifest` 的 `assemblyIdentity version` 同步到同一版本。
 - [ ] Release 资产齐全：`GeZi-v<版本>-x86_64.AppImage`、`.sha256`、
-      `GeZi-linux-x64.tar.gz`、`.tar.gz.sha256`。
+      `GeZi-linux-x64.tar.gz`、`.tar.gz.sha256`、
+      `gezi-downloader-<版本>-1-x86_64.pkg.tar.zst`、`.sha256`。
 - [ ] Release 说明里的 SHA-256 与资产文件内容一致（说明由 CI 从 `.sha256` 生成）。
 - [ ] AppImage 内不含 PDB（`tools/package_appimage.sh` 会剔除，可解包复核）。
 
