@@ -619,42 +619,25 @@ namespace GeZi
 
         /// <summary>
         /// 未登录时使用「必须登录」的功能（下载 / 获取直链等），
-        /// **明确弹框提示**并切到登录页。
-        /// 原来这些入口只往日志里写一行「请先登录或解析分享」—— 日志在界面下方不起眼，
-        /// 用户点了没反应，只会以为程序坏了。
+        /// 用**灵动岛**轻提示（用户 m18669/m18688：所有需登录提示都改走灵动岛，不再弹模态框），
+        /// 并切到登录页。原来这些入口只往日志写一行或弹模态框，用户嫌打断、要点掉。
         /// </summary>
         private bool RequireLogin(string action)
         {
             if (IsLoggedInAny) return true;
 
-            // 🚨 2026-10-26 用户反馈：「我刚进软件就点续传/下载，直接报 401 登录态已失效，
-            //   可我账号明明还没登录完成呢 —— 说好了在没登录成功之前要给提示。」
-            //   根因：启动时会异步恢复上次的登录态（_startupLoginTask），这期间
-            //   IsLoggedInAny 还是 false、_client 还是 null，用户一点就发请求 → 服务端 401。
-            //   这里区分「真的没登录」和「正在恢复」：后者给的是"稍候"，不是"去登录"。
+            // 🚨 2026-10-26：启动异步恢复登录态（_startupLoginTask）期间 IsLoggedInAny 仍为 false，
+            //   用户一点就发请求 → 401。区分「真没登录」和「正在恢复」：后者给"稍候"。
             if (IsLoginPending)
             {
-                try
-                {
-                    AppDialog.Show(this,
-                        "登录态正在恢复中（上次的账号还在校验），请稍等几秒再试。\n\n"
-                        + "这不是登录失败，不需要重新扫码。",
-                        "请稍候", MessageBoxButton.OK, MessageBoxImage.Information);
-                }
-                catch { }
+                // 正在恢复：轻提示「稍候」，不切登录页（不是登录失败）。
+                NoticeNeedLogin("登录态正在恢复中，请稍等几秒再试（不用重新登录）", false);
                 Log("登录态正在恢复，已跳过本次「" + action + "」。稍等几秒再试即可。");
                 return false;
             }
 
-            try
-            {
-                AppDialog.Show(this,
-                    action + "需要先登录。已为你切到登录页。",
-                    "需要登录", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch { }
-            // 顺手把用户带到登录页（登录页 = 第 4 个 Tab，索引 3）
-            try { Tabs.SelectedIndex = 3; } catch { }
+            // 真没登录：灵动岛轻提示 + 自动切到登录页（切页持续可见，弥补轻提示会消失）。
+            NoticeNeedLogin(action + "需要先登录，已为你切到登录页。");
             return false;
         }
 
@@ -765,11 +748,24 @@ namespace GeZi
 
         private void ShowAccountsDialog(PanKind? filter)
         {
-            string curCookie = _client?.CookieStr ?? _settings.Cookie ?? "";
             // 当前账号的 Key：优先用它判断"哪一行是当前账号"，Cookie 只作兜底
             string curKey = _settings.CurrentAccountKey ?? "";
             if (string.IsNullOrEmpty(curKey))
-                curKey = _client?.AccountSig ?? "";
+                curKey = _client != null ? (_client.AccountSig ?? "") : "";
+            // `CurrentAccountKey` 是**全局唯一**的一个字段，记录的是「当前登录账号」，
+            // 而当前登录账号一定属于 `_activeKind` 这家网盘。
+            // 所以看别家网盘的账号列表时，这个 Key 与那一家的档案毫无关系，
+            // 不能拿去比（否则纯属误判）。
+            if (filter.HasValue && filter.Value != _activeKind)
+                curKey = "";
+
+            // 🚨 2026-11-14 修「阿里/迅雷的账号列表里，当前账号不高亮」：
+            //   原来这里写死 `_client?.CookieStr ?? _settings.Cookie` —— **只取夸克 Cookie**。
+            //   而 `_client` 在阿里/迅雷下是 null（那两家走 _ownProvider），
+            //   于是 curCookie 退回夸克 Cookie，与阿里/迅雷档案里的 Cookie 永远对不上，
+            //   当前行只能靠 curKey 命中；一旦 key 与实际档案不一致（阿里/迅雷的 key
+            //   是"昵称-设备号前8位"生成的，容易与 CurrentAccountKey 错位），就不高亮了。
+            //   ⇒ 现在由 BuildAccountRow 按**每一行自己的网盘**取凭证，这里不再传 Cookie。
 
             bool allPans = !filter.HasValue;
             string panName = allPans ? "" : PanUrlParser.DisplayNameOf(filter.Value);
@@ -868,14 +864,14 @@ namespace GeZi
                         {
                             // 已经有分节标题了，行内副标题不用再重复网盘名
                             foreach (var a in group)
-                                listBox.Items.Add(BuildAccountRow(a, curKey, curCookie, win, rebuild, false));
+                                listBox.Items.Add(BuildAccountRow(a, curKey, win, rebuild, false));
                         }
                     }
                 }
                 else
                 {
                     foreach (var a in accounts)
-                        listBox.Items.Add(BuildAccountRow(a, curKey, curCookie, win, rebuild, false));
+                        listBox.Items.Add(BuildAccountRow(a, curKey, win, rebuild, false));
                 }
             };
             rebuild();
@@ -992,12 +988,8 @@ namespace GeZi
 
         /// <summary>账号列表里的一行：网盘色块 + 昵称/副标题 + 「切换」「删除」。</summary>
         /// <param name="curKey">当前登录账号的 Key（来自 <see cref="AppSettings.CurrentAccountKey"/>）。</param>
-        /// <param name="curCookie">
-        /// 当前 Cookie。仅在 <paramref name="curKey"/> 为空时作为**兜底**判据
-        /// （老配置文件里没有 CurrentAccountKey 字段）。
-        /// </param>
         /// <param name="showPan">是否在副标题里带上网盘名（「全部账号」视图才需要）。</param>
-        private Border BuildAccountRow(AccountProfile acc, string curKey, string curCookie,
+        private Border BuildAccountRow(AccountProfile acc, string curKey,
             Window owner, Action rebuild, bool showPan)
         {
             // 原来只拿整串 Cookie 比字符串，而运行时 Cookie 会被
@@ -1008,14 +1000,35 @@ namespace GeZi
             // ⚠️ 2026-10-25：`IsPrimary` 是「**这家网盘**下次切过去用哪个」—— 四家各自都有一个，
             // 不能直接当「正在使用」用，否则四家的主账号按钮会全部置灰、用户点不了切到别家。
             // 「正在使用」= 这家网盘是当前激活的网盘 **且** 这条是它的主账号。
+            //
+            // 🚨 2026-11-14 修「阿里/迅雷的当前账号不高亮」：兜底 Cookie 原来由外面统一传进来，
+            //   而外面只取了**夸克**的 Cookie（`_client?.CookieStr ?? _settings.Cookie`），
+            //   `_client` 在阿里/迅雷下是 null ⇒ 传进来的永远是夸克 Cookie ⇒ 对不上。
+            //   改成按**这一行自己的网盘**取凭证。
             bool isPrimary = acc.IsPrimary;
-            bool isCurrent = (isPrimary && _activeKind == (PanKind)acc.PanKind)
+            var kind = (PanKind)acc.PanKind;
+            string curCookie = PanCredentialFor(kind);
+            // 兜底比对用**指纹**而不是整串字符串：运行时 Cookie 会被刷新（__puus 三小时一换），
+            // 整串一比就永远不相等（这也是当年"切换按钮该置灰却可点"的根因之一）。
+            bool cookieMatch = false;
+            if (string.IsNullOrEmpty(curKey)
+                && !string.IsNullOrEmpty(curCookie)
+                && !string.IsNullOrEmpty(acc.Cookie))
+            {
+                try
+                {
+                    cookieMatch = string.Equals(
+                        AccountStore.StableCookieFingerprint(acc.Cookie),
+                        AccountStore.StableCookieFingerprint(curCookie),
+                        StringComparison.Ordinal);
+                }
+                catch { cookieMatch = false; }
+            }
+            bool isCurrent = (isPrimary && _activeKind == kind)
                 || (!string.IsNullOrEmpty(curKey)
                     ? string.Equals(acc.Key, curKey, StringComparison.Ordinal)
-                    : (!string.IsNullOrEmpty(curCookie) &&
-                       string.Equals(acc.Cookie, curCookie, StringComparison.Ordinal)));
+                    : cookieMatch);
 
-            var kind = (PanKind)acc.PanKind;
 
             var grid = new Grid();
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -1181,7 +1194,8 @@ namespace GeZi
                     MessageBoxButton.OKCancel, MessageBoxImage.Warning);
                 if (r != MessageBoxResult.OK)
                     return;
-                if (AccountStore.Remove(acc.PanKind, acc.Key))
+                string removeError;
+                if (AccountStore.Remove(acc.PanKind, acc.Key, out removeError))
                 {
                     Log("已删除本机保存的账号「" + acc.DisplayName + "」");
                     // 删的是当前账号 → 把配置里的 Cookie 一起清掉，否则"账号还在"
@@ -1195,9 +1209,10 @@ namespace GeZi
                 }
                 else
                 {
+                    // 🚨 2026-11-14：不再写死「账号文件正被占用」——
+                    //   真实原因由 AccountStore.Remove 带回来（权限/路径/占用/磁盘）。
                     AppDialog.Show(owner,
-                        "删除失败：账号文件正被占用。\n\n"
-                        + "请关闭其他鸽子下载窗口后重试。",
+                        "删除失败：" + (string.IsNullOrEmpty(removeError) ? "没有找到这个账号档案。" : removeError),
                         "删除账号", MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
             };
@@ -1216,8 +1231,15 @@ namespace GeZi
                 BorderThickness = new Thickness(isCurrent ? 1.5 : 1),
                 Background = (Brush)(TryFindResource(isCurrent ? "SurfaceAltBrush" : "SurfaceBrush")
                                      ?? new SolidColorBrush(Color.FromRgb(0xF6, 0xF6, 0xF6))),
-                BorderBrush = (Brush)(TryFindResource(isCurrent ? "AccentBrush" : "BorderBrushSoft")
-                                     ?? new SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xE6))),
+                // 🚨 2026-11-14 修「当前账号那一行看不出高亮」：
+                //   这里原来写的是 "AccentBrush" —— 而**这个资源键在 Resources/*.xaml 里
+                //   根本不存在**（全仓 xaml 0 命中），TryFindResource 恒为 null，
+                //   于是每一行都回落到同一个灰边 #E6E6E6，当前账号与普通账号长得一模一样。
+                //   项目里真正存在的强调色键是 PrimaryBrush（Resources/Brushes.xaml:21）。
+                BorderBrush = (Brush)(TryFindResource(isCurrent ? "PrimaryBrush" : "BorderBrushSoft")
+                                     ?? new SolidColorBrush(isCurrent
+                                            ? Color.FromRgb(0x4F, 0x6B, 0xED)
+                                            : Color.FromRgb(0xE6, 0xE6, 0xE6))),
             };
         }
 
@@ -1300,7 +1322,7 @@ namespace GeZi
         {
             if (!IsLoggedInAny)
             {
-                Log("尚未登录");
+                NoticeNeedLogin("导出凭证需要先登录，已切到登录页");
                 return;
             }
             try
@@ -1410,6 +1432,10 @@ namespace GeZi
                 case PanKind.Aliyun:
                     _settings.AliyunRefreshToken = "";
                     _settings.AliyunAccessToken = "";
+                    // 设备身份（device_id + secp256k1 私钥）是「这台机器曾登录过阿里」的凭证，
+                    // 登出必须一并清掉，否则配置里残留设备字段、下次会被当成「已登录过」。
+                    _settings.AliyunDeviceId = "";
+                    _settings.AliyunDevicePrivateKey = "";
                     break;
                 case PanKind.Xunlei:
                     _settings.XunleiPanToken = "";

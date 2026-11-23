@@ -137,7 +137,7 @@ namespace GeZi
         // 一行 = 文件夹图标 + 名称 + 「时间 · 分享 ID · 提取码」，悬停整行高亮。
 
         /// <summary>
-        /// 窗口级按键。**目前只处理 Esc**（关闭解析历史面板）。
+        /// 窗口级按键。**目前只处理 Esc**（关闭浮层面板）。
         /// 🚨 第三方分支那一整套快捷键（1/2/3 切页、h 开历史、a/d/x/g 等）
         /// 我们**不采纳**，所以这里刻意不做任何单键分发 —— 只保留
         /// 「面板开着时 Esc 关闭」这一条**必要**行为：面板自己的文案就写着
@@ -146,6 +146,24 @@ namespace GeZi
         private void OnMainKeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key != Key.Escape) return;
+            // 🚨 2026-11-15 就地改名（解析历史 / 收藏夹里名字原地变输入框）：
+            //   正在改名字时，Esc 是「取消改名」，**不是**「关掉面板」。
+            //   ⚠️ 这里用的是 PreviewKeyDown（隧道事件，由外往里），
+            //      窗口比输入框**先**收到 Esc —— 所以必须在这里拦下来，
+            //      否则按 Esc 取消改名的同时，整个面板也被关掉了。
+            if (InlineNameEditor.AnyEditing)
+            {
+                e.Handled = true;
+                return;
+            }
+            // 🚨 2026-11-15 收藏夹也写了「按 Esc 关闭」，所以两个面板都要认 Esc。
+            //   先判收藏夹：它叠在解析历史上层开着的话，先关最上面那个。
+            if (FavoriteOpen)
+            {
+                HideFavoritePanel();
+                e.Handled = true;
+                return;
+            }
             if (!HistoryOpen) return;
             HideHistoryPanel();
             e.Handled = true;
@@ -683,7 +701,7 @@ namespace GeZi
         // 用户要求：不弹新窗口，在右侧内容区显示，和设置/登录一致。
         // 旧的 AboutWindow 弹窗已废弃，但它里面的「赞赏码 / 检查更新 / 链接」功能必须保留。
 
-        private const string AboutRepoUrl = "https://github.com/huaotem-bot/gezi-quark-downloader";
+        private const string AboutRepoUrl = "https://github.com/huaotem-bot/GeZi-downloader";
         private const string AboutBiliUrl = "https://b23.tv/gIoEfQM";
 
         /// <summary>把版本号填进关于页（页面加载时调用一次）。</summary>
@@ -764,18 +782,34 @@ namespace GeZi
                     return;
                 }
                 if (UpdateService.Settings != null)
-                    UpdateService.Apply(UpdateService.Settings, m, OnUpdateFound);
+                    UpdateService.Apply(UpdateService.Settings, m, null);
 
-                if (UpdateService.HasUpdate && UpdateService.Latest != null)
+                // 🚨🚨 2026-11-15 修「点了检查更新不弹窗」（用户原话：「当有新版本的时候
+                //   我点击检查更新会出现更新弹窗让我能够下载」）：
+                //   原来这里只改了一行状态文字（还写着「已弹出更新提示」，其实什么都没弹），
+                //   真正的更新窗口 UpdatePromptWindow 只在**已废弃的旧关于窗**里被调用过 ⇒
+                //   用户永远看不到更新弹窗，也就没法下载新版本。
+                //   ⇒ 现在真的把更新窗口弹出来。
+                bool newer = m.Version != null && UpdateService.CurrentVersion != null
+                             && m.Version.CompareTo(UpdateService.CurrentVersion) > 0;
+
+                if (newer)
                 {
-                    SetAboutUpdateStatus("发现新版本 v" + UpdateService.Latest.Version.ToString()
-                        + "，已弹出更新提示。", false);
+                    // 🚨 2026-11-15：被忽略过的版本**照样弹窗** ——
+                    //   用户既然主动点了「检查更新」，就是想看更新说明、想下载。
+                    //   以前这里只写一行「你已忽略」，用户还是拿不到下载入口，等于死路。
+                    ShowUpdatePrompt(m);
+
+                    if (UpdateService.HasUpdate)
+                        SetAboutUpdateStatus("已打开更新窗口 v" + m.Version.ToString() + "。", false);
+                    else
+                        SetAboutUpdateStatus("已打开 v" + m.Version.ToString()
+                            + " 的更新窗口（你之前忽略过这个版本）。", false);
+                    return;
                 }
-                else
-                {
-                    SetAboutUpdateStatus("已是最新版本。", false);
-                    Log("已是最新版本。");
-                }
+
+                SetAboutUpdateStatus("已是最新版本。", false);
+                Log("已是最新版本。");
             }
             catch (Exception ex)
             {
@@ -790,6 +824,34 @@ namespace GeZi
                     if (btn != null) { btn.IsEnabled = true; btn.Content = "检查更新"; }
                 }
                 catch { }
+            }
+        }
+
+        /// <summary>
+        /// 弹出「更新可用」窗口（版本对比 + 更新说明 + 直接下载 / 前往下载）。
+        /// 用户在窗口里点了「忽略此版本」才落盘（其它地方不写）。
+        /// </summary>
+        private void ShowUpdatePrompt(GitHubRelease m)
+        {
+            if (m == null) return;
+            try
+            {
+                var prompt = new UpdatePromptWindow(m)
+                {
+                    Owner = this,
+                };
+                prompt.ShowDialog();
+
+                if (prompt.IgnoredByUser && UpdateService.Settings != null)
+                {
+                    UpdateService.IgnoreCurrent(UpdateService.Settings);
+                    SettingsStore.Save(UpdateService.Settings);
+                    SetAboutUpdateStatus("已忽略 v" + m.Version + " 的更新提醒。", false);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("打开更新窗口失败：" + ex.Message);
             }
         }
 

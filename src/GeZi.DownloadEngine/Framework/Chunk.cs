@@ -166,6 +166,28 @@ public class Chunk
     }
 
     /// <summary>
+    /// 「这一片连续多少轮一个字节都没下动」的计数（2026-11-14 熔断用）。
+    /// <para>
+    /// 只增不清零：每轮 <see cref="Framework.ChunkDownloader"/> 真正读进数据时由
+    /// <c>TouchProgress()</c> 清零；一次重试结束仍无进展就 +1。
+    /// 达到阈值后抛 <see cref="ChunkStalledException"/> 让本轮收手（**不判失败、不清续传**）。
+    /// </para>
+    /// </summary>
+    public int NoProgressRounds;
+
+    /// <summary>记一次「有进展」：把熔断计数清零。</summary>
+    public void TouchProgress()
+    {
+        NoProgressRounds = 0;
+    }
+
+    /// <summary>以当前 <see cref="Position"/> 为基线记一次「本轮无进展」。</summary>
+    public int MarkNoProgress()
+    {
+        return ++NoProgressRounds;
+    }
+
+    /// <summary>
     /// 这一片是否真的把数据写满了。
     /// <para>
     /// 🚨 2026-10-28 修 off-by-one：与 <see cref="CanWrite"/> 同一处错误。

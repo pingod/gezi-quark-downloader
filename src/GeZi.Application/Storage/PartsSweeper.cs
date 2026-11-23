@@ -291,8 +291,12 @@ namespace GeZi.Services
         }
 
         /// <summary>
-        /// 是不是分片文件。与 Python 版判据一致（<c>.partmeta</c> 或文件名含 <c>.part</c>），
-        /// 另加 C# 版自己的两种：<c>.qmeta</c>（续传元数据）与 <c>meta.json</c>（自定义根目录下）。
+        /// 是不是分片文件。判据只认这四种：<c>.partmeta</c>、<c>.qmeta</c>（续传元数据）、
+        /// <c>meta.json</c>（自定义根目录下）、以及引擎真实的片名 <c>p000000</c>。
+        /// <para>
+        /// ⚠️ 曾经还有一条「文件名含 <c>.part</c>」的模糊判据（照抄 Python 版），
+        /// 2026-11-14 已删除：它会误删 WinRAR 分卷 <c>xxx.part01.rar</c>（issue #14）。
+        /// </para>
         /// <para>
         /// 🚨 2026-10-28 补：真实分片文件名是 <c>p000000</c> / <c>p000001</c> …（见
         /// <c>Legacy/SegmentedDownloader.Split.cs:361-362</c>），
@@ -309,7 +313,13 @@ namespace GeZi.Services
             if (name.EndsWith(".partmeta", StringComparison.OrdinalIgnoreCase)) return true;
             if (name.EndsWith(".qmeta", StringComparison.OrdinalIgnoreCase)) return true;
             if (name.Equals("meta.json", StringComparison.OrdinalIgnoreCase)) return true;
-            if (name.IndexOf(".part", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+
+            // 🚨🚨 2026-11-14 修 issue #14：这里原本还有一句
+            //     if (name.IndexOf(".part", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            // 它把 WinRAR 的分卷压缩包（xxx.part01.rar / xxx.part02.rar …）当成自己的分片，
+            // 于是「清扫过期分片」会把用户的分卷包删掉（超过 DefaultMaxAgeDays 天就无差别删除）。
+            // 引擎自己的分片/元数据命名是固定的 p000000 与 .partmeta/.qmeta/meta.json，
+            // 根本不需要靠「名字里含 .part」这种模糊判据 —— 已删除，别再按这个思路加回来。
 
             // 真实分片：p + 6 位数字（引擎按片序号命名，见 Split.cs 的 PartsPathOf）。
             if (IsPartSegmentName(name)) return true;

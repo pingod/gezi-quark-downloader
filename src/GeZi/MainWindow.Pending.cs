@@ -185,6 +185,8 @@ namespace GeZi
                 try { existing = HistoryStore.GetPending(); }
                 catch { }
                 var createdAtOf = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+                // 同一 Dest 已记录的账号指纹（任务归属一经确定就不再变）
+                var accountTagOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 if (existing != null)
                 {
                     foreach (var old in existing)
@@ -192,6 +194,8 @@ namespace GeZi
                         if (old == null || string.IsNullOrEmpty(old.Dest)) continue;
                         if (old.CreatedAtTicks > 0 && !createdAtOf.ContainsKey(old.Dest))
                             createdAtOf[old.Dest] = old.CreatedAtTicks;
+                        if (!string.IsNullOrEmpty(old.AccountTag) && !accountTagOf.ContainsKey(old.Dest))
+                            accountTagOf[old.Dest] = old.AccountTag;
                     }
                 }
                 long nowTicks = DateTime.Now.Ticks;
@@ -201,8 +205,16 @@ namespace GeZi
                     // 更新包下载不持久化：跨重启续传没有意义，且避免 Pending 信息残缺
                     if (t.Job.SkipPersist)
                         continue;
+                    // 🚨🚨 2026-11-14 改：把 Failed 也纳入持久化。
+                    //   原来只存 Queued/Downloading/Paused/Cancelling，失败任务**完全不入库**，
+                    //   于是「下载失败 → 关掉软件 → 再打开」任务就彻底消失了：
+                    //   用户既看不到它、也没有任何入口把它接着下（.geziresume 明明还在盘上）。
+                    //   现在失败也算「未完成」——它确实没完成，而且续传点完好，
+                    //   用户点「重试下载」就能从断点继续，一个字节都不白下。
+                    //   ⚠️ 只加 Failed，不动 Cancelled：用户主动取消的语义是「不要了」。
                     if (t.State == JobState.Queued || t.State == JobState.Downloading
-                        || t.State == JobState.Paused || t.State == JobState.Cancelling)
+                        || t.State == JobState.Paused || t.State == JobState.Cancelling
+                        || t.State == JobState.Failed)
                     {
                         // 签名里带 Dest：原来只有 Name|State，导致同一任务换了落盘路径
                         // （用户改下载目录后重新入队）时签名不变、新路径永远不落盘，
@@ -256,6 +268,10 @@ namespace GeZi
                             // 2026-11-05：沿用磁盘上的原始创建时刻，只有全新任务才用现在。
                             // ⚠️ 不能用内联 out 声明（老语言版本不支持），先查再取。
                             CreatedAtTicks = CreatedAtFor(createdAtOf, t.Job.Dest, nowTicks),
+                            // 2026-11-14：记下"这条任务属于哪个账号"。
+                            // 同一个 Dest 已有旧记录时**沿用旧 Tag** —— 任务中途换账号不能改归属，
+                            // 否则续传点还在、却已经认不出是谁的下载了。
+                            AccountTag = AccountTagFor(accountTagOf, t.Job.Dest, pi),
                         });
                         if (!string.IsNullOrEmpty(t.Job.Dest))
                             seen.Add(t.Job.Dest);
@@ -272,14 +288,16 @@ namespace GeZi
                 //
                 //   正解：先收集「当前已处于终态的任务」的 Dest；
                 //   磁盘记录若落在这些 Dest 上，说明它对应的任务已经结束，不再保留。
-                //   ⚠️ 只排除终态（Completed/Failed/Cancelled）；Cancelling 是非终态
-                //      （强杀时分片可能还没清完），必须继续保留 —— AGENTS.md 二十一节红线。
+                //   ⚠️ 只排除 Completed / Cancelled。
+                //      **Failed 绝不能排除**（2026-11-14 改）：失败任务现在会进 list 持久化，
+                //      「未完成」入口要留着让用户点「重试下载」从断点接着下。
+                //      把它们排掉 = 用户看到一个还在盘上的 .geziresume，却没有任何入口可用。
+                //      Cancelling 是非终态（强杀时分片可能还没清完），也必须继续保留 —— AGENTS.md 二十一节红线。
                 var terminalDests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var t in _tasks)
                 {
                     if (t?.Job == null || string.IsNullOrEmpty(t.Job.Dest)) continue;
-                    if (t.State == JobState.Completed || t.State == JobState.Failed
-                        || t.State == JobState.Cancelled)
+                    if (t.State == JobState.Completed || t.State == JobState.Cancelled)
                         terminalDests.Add(t.Job.Dest);
                 }
 
@@ -337,6 +355,32 @@ namespace GeZi
             if (!string.IsNullOrEmpty(dest) && map.TryGetValue(dest, out born) && born > 0)
                 return born;
             return nowTicks;
+        }
+
+        /// <summary>
+        /// 算出这条任务应当记录的「账号指纹」。
+        /// <para>
+        /// 优先级：① 磁盘上同一 Dest 的旧记录（任务归属不能因为中途换账号而改变）
+        /// → ② 这条任务自己的 <c>PendingInfo</c> 指纹（入队时就确定了）
+        /// → ③ 当前凭证的指纹（兜底，老任务没有前两者的值）。
+        /// </para>
+        /// </summary>
+        private string AccountTagFor(Dictionary<string, string> oldTags, string dest, PendingInfo pi)
+        {
+            string tag;
+            if (!string.IsNullOrEmpty(dest) && oldTags.TryGetValue(dest, out tag) && !string.IsNullOrEmpty(tag))
+                return tag;
+            if (pi != null && !string.IsNullOrEmpty(pi.AccountTag))
+                return pi.AccountTag;
+            try
+            {
+                // 这条任务来自哪家网盘就用哪家的凭证算指纹（不能一律用夸克 Cookie）。
+                // 🚨 走 ComputeAccountTag 而不是直接 StableCookieFingerprint：
+                //   阿里/迅雷要用稳定设备号，不能拿会轮换的 token 当指纹。
+                PanKind kind = pi != null ? (PanKind)pi.PanKind : _activeKind;
+                return ComputeAccountTag((int)kind);
+            }
+            catch { return ""; }
         }
 
 
@@ -399,10 +443,97 @@ namespace GeZi
                 t.State = JobState.Downloading;
                 Log("已恢复: " + t.Name);
             }
+            else if (t.State == JobState.Failed)
+            {
+                // 🚨🚨 2026-11-14 新增：失败任务也能直接重试（用户硬要求
+                //   「任何文件都不可以轻易说失败，必须有其他路径继续下载」）。
+                //   ⚠️ 不能复用 Paused 那条路：失败任务的 Job 已经跑完、CancellationToken
+                //     可能已触发、服务实例也从调度器表里摘掉了，直接 ResumeJob() 什么都
+                //     不会发生。必须**重新入队**：借磁盘上那条 PendingTask 记录重走一遍
+                //     取链 + 下载，引擎会自动命中 .geziresume 从断点接着下。
+                RetryFailedTask(t);
+            }
             else
             {
                 Log("该任务当前状态不可恢复（" + t.StatusText + "）");
             }
+        }
+
+
+        /// <summary>
+        /// 把一条失败任务重新排队，从断点接着下。
+        /// <para>
+        /// 做法：先用这条任务的 Dest 在磁盘待续传记录里找到对应条目（SyncPending 已经把
+        /// Failed 也写进去了，所以一定找得到），然后把这**一条**交给
+        /// <see cref="ResumePendingBatchAsync"/> —— 它本来就负责「重新取链 + 从断点续传」，
+        /// 走的是和新任务完全一样的成熟链路，不需要另写一套。
+        /// </para>
+        /// <para>
+        /// 找不到记录时（老版本留下的失败任务、或记录已被清理）退回「重新下载原链接」，
+        /// 至少不让用户看到「点了没反应」。
+        /// </para>
+        /// </summary>
+        private void RetryFailedTask(TaskItem t)
+        {
+            if (t?.Job == null) return;
+            string dest = t.Job.Dest;
+            string name = t.Name;
+
+            // 先从界面上摘掉旧的失败行：等一会儿新行会以「排队中」重新出现。
+            // ⚠️ 必须在异步之前摘，否则用户会看到「失败」和「排队中」两行并存。
+            RemoveTaskRow(t);
+
+            List<PendingTask> all = null;
+            try { all = HistoryStore.GetPending(); }
+            catch { }
+            PendingTask target = null;
+            if (all != null && !string.IsNullOrEmpty(dest))
+            {
+                foreach (var p in all)
+                {
+                    if (p == null || string.IsNullOrEmpty(p.Dest)) continue;
+                    if (string.Equals(p.Dest, dest, StringComparison.OrdinalIgnoreCase))
+                    {
+                        target = p;
+                        break;
+                    }
+                }
+            }
+
+            if (target == null)
+            {
+                // 没有待续传记录 → 只能从头来。仍然给用户一个明确出路。
+                Log("该任务没有可续传的进度记录，将重新下载：" + name);
+                ResumeTaskByUrl(t);
+                return;
+            }
+
+            Log("重试下载：" + name + "（从已下载的部分继续，不会重下）");
+            // 走与「未完成」入口完全相同的续传链路。
+            // ⚠️ 不 await：它内部有大量异步 I/O，UI 线程不能等；它自己会回主线程更新界面。
+            _ = ResumePendingBatchAsync(new List<PendingTask> { target });
+        }
+
+
+        /// <summary>
+        /// 没有待续传记录时的兜底：明确告诉用户下一步怎么做。
+        /// <para>
+        /// ⚠️ 这里**不**尝试复用原 job 重新下载 —— <see cref="DownloadJob.Cancel"/> 是只读的
+        /// <c>CancellationTokenSource</c>，一旦取消无法复位（net48 没有 <c>TryReset</c>），
+        /// 硬塞回去只会得到一个立刻又取消的空转任务，比不做事更糟。
+        /// 正常路径下走不到这里：SyncPending 已把 Failure 也写进磁盘记录。
+        /// </para>
+        /// </summary>
+        private void ResumeTaskByUrl(TaskItem t)
+        {
+            string name = t?.Name ?? "";
+            Log("该任务没有可续传的进度记录，无法自动重试：" + name);
+            AppDialog.Show(this,
+                "这条任务没有留下可续传的进度记录（可能是旧版本创建的失败任务）。\n\n"
+                + "请回到浏览页重新点一次「下载」，会从头开始。",
+                "无法重试",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
         }
 
 
@@ -1272,13 +1403,7 @@ namespace GeZi
             //   会用到它，必须保证传进去的是**同 kind** 的实例（见该方法的实现）。
             if (client == null && !IsLoggedInAny)
             {
-                Log("续传需要先登录。请登录后重新下载（进度记录在，会自然续传）。");
-                AppDialog.Show(this,
-                    "续传需要重新获取直链，得先登录。\n\n"
-                    + "进度记录都还在，登录后再点一次「继续下载」即可，不会重下。",
-                    "需要先登录",
-                    System.Windows.MessageBoxButton.OK,
-                    System.Windows.MessageBoxImage.Information);
+                NoticeNeedLogin("续传需要先登录，进度记录都在，登录后继续即可");
                 return;
             }
 
@@ -1320,6 +1445,15 @@ namespace GeZi
                     allocIdx++;
                     try
                     {
+                        // 🚨🚨 2026-11-14 先校验账号：换账号续传会拿错凭证取链
+                        //   （取不到 / 取到别的账号里的同名文件）。老任务没有 AccountTag，放行。
+                        string accMismatch = CheckAccountMismatch(p);
+                        if (!string.IsNullOrEmpty(accMismatch))
+                        {
+                            Log("[" + (p.Name ?? "?") + "] 跳过续传：" + accMismatch);
+                            skipped.Add(p.Name ?? "?");
+                            continue;
+                        }
                         // 🚨 2026-10-26：取链**必须有超时**。
                         //   原来这里传的是 default(CancellationToken)，而 QuarkSession 的 HttpClient
                         //   是 Timeout.InfiniteTimeSpan —— 网络半死时这个 await 永远不返回，
@@ -1446,6 +1580,7 @@ namespace GeZi
                             if (client == null)
                             {
                                 Log("[" + p.Name + "] 这条是夸克分享，需要夸克登录态才能续传，已跳过。");
+                                NoticeNeedLogin("这条是夸克分享，需要夸克登录态才能续传", false);
                                 skipped.Add(p.Name ?? "?");
                                 continue;
                             }
@@ -1501,6 +1636,7 @@ namespace GeZi
                             {
                                 Log("[" + p.Name + "] 需要 " + PanUrlParser.DisplayNameOf(kind)
                                     + " 登录态才能续传，已跳过。");
+                                NoticeNeedLogin("需要 " + PanUrlParser.DisplayNameOf(kind) + " 登录态才能续传", false);
                                 skipped.Add(p.Name ?? "?");
                                 continue;
                             }
@@ -1579,6 +1715,8 @@ namespace GeZi
                                 StartFid = p.StartFid, ShareRelDir = p.ShareRelDir,
                                 // 保留来源网盘：否则续传一次就退化成"夸克任务"
                                 PanKind = p.PanKindValue,
+                                // 一并把账号指纹带进运行期任务：再次 SyncPending 时不会丢。
+                                AccountTag = p.AccountTag,
                             },
                         };
                         var captured = job;
@@ -1631,15 +1769,9 @@ namespace GeZi
                     // 有跳过项时说明记录还在，用户可以从「未完成 N」入口再试一次。
                     if (skipped.Count > 0)
                     {
-                        // 模态框必须在主线程弹（上面有 ConfigureAwait(false)）。
                         int n = skipped.Count;
-                        RunOnUi(() => AppDialog.Show(this,
-                            string.Format("这 {0} 个任务这次都没能取到直链。\n\n"
-                                + "记录和进度都保留着，登录后点任务页的「未完成」入口可以再试一次，"
-                                + "不会从头重下。", n),
-                            "没能开始续传",
-                            System.Windows.MessageBoxButton.OK,
-                            System.Windows.MessageBoxImage.Warning));
+                        NoticeNeedLogin(string.Format(
+                            "这 {0} 个任务需要登录对应网盘才能续传，记录和进度都在，登录后可再试一次", n));
                     }
                     return;
                 }
@@ -2071,6 +2203,75 @@ namespace GeZi
             // 兜底：配置快照（可能已过期，但总比空着强）。
             if (_settings == null) return "";
             return kind == PanKind.Uc ? (_settings.UcCookie ?? "") : (_settings.Cookie ?? "");
+        }
+
+
+        /// <summary>
+        /// 算出「现在这一家网盘、当前登录的这个账号」的指纹。
+        /// 用于给**新建**任务打账号标记（<see cref="PendingInfo.AccountTag"/>），
+        /// 以及续传前校验「你现在的账号是不是当初下这个文件的账号」。
+        /// </summary>
+        private string ComputeAccountTag(int panKind)
+        {
+            try
+            {
+                var kind = (PanKind)panKind;
+
+                // 🚨🚨 2026-11-14 修「同账号续传被误判成换账号」：
+                //   阿里/迅雷的 access_token / refresh_token 每次续期都会轮换（迅雷
+                //   refresh_token 单次有效、access_token 约 2 小时过期；阿里 access_token
+                //   同样短期）。绝不能拿 token 串当账号指纹 —— 否则同账号每续期一次就换
+                //   一张 token，这里算出的指纹就变一次，CheckAccountMismatch 会把
+                //   「续期后的自己」误判成「换了账号」而拒绝续传，还弹误导文案。
+                //   这两家的稳定标识是**设备号**（账号级固定不变）：
+                //     迅雷 → XunleiWebDeviceId 优先（网页登录时写入，最稳定），
+                //            XunleiDeviceId 兜底（账号登录套）；
+                //     阿里 → AliyunDeviceId（设备签名用，固定）。
+                //   "dev:" 前缀与 StableCookieFingerprint 的 ExtractDeviceId 返回格式一致。
+                if (kind == PanKind.Xunlei)
+                {
+                    string dev = !string.IsNullOrEmpty(_settings.XunleiWebDeviceId)
+                        ? _settings.XunleiWebDeviceId
+                        : (_settings.XunleiDeviceId ?? "");
+                    return string.IsNullOrEmpty(dev) ? "" : "dev:" + dev;
+                }
+                if (kind == PanKind.Aliyun)
+                {
+                    string dev = _settings.AliyunDeviceId ?? "";
+                    return string.IsNullOrEmpty(dev) ? "" : "dev:" + dev;
+                }
+
+                // 夸克/UC：__pus 是长期登录态（不轮换），StableCookieFingerprint 能提取稳定指纹。
+                return AccountStore.StableCookieFingerprint(PanCredentialFor(kind));
+            }
+            catch { return ""; }
+        }
+
+
+        /// <summary>
+        /// 续传前校验账号是否匹配。
+        /// <para>
+        /// 🚨🚨 2026-11-14 修「换了账号还能续传，结果取不到链/下到别人的文件」：
+        /// 续传取链用的是「当前这一家的当前账号」，而任务记录里原来**没有账号信息**，
+        /// 于是拿 A 账号的凭证去取 B 账号的文件。同网盘多账号时必然踩。
+        /// </para>
+        /// <returns>
+        /// 空串 = 可以对账继续；非空 = 一句给人看的拒绝理由。
+        /// </returns>
+        /// </summary>
+        private string CheckAccountMismatch(PendingTask p)
+        {
+            if (p == null) return "";
+            // 老任务没有这个字段 → 不校验（不能把历史任务判死，这是兼容底线）
+            if (string.IsNullOrEmpty(p.AccountTag)) return "";
+            string now = ComputeAccountTag(p.PanKindValue);
+            // 现在算不出指纹（没凭证/凭证残缺）→ 也不拦，交给后面的取链去报真实原因
+            if (string.IsNullOrEmpty(now)) return "";
+            if (string.Equals(now, p.AccountTag, StringComparison.Ordinal)) return "";
+
+            string panName = PanUrlParser.DisplayNameOf((PanKind)p.PanKindValue);
+            return "这条任务是用「另一个 " + panName + " 账号」下载的，当前登录的不是同一个账号。"
+                + "换回原来的账号再试，或者重新下载（进度记录都在，不会从头下）。";
         }
 
 

@@ -1,4 +1,4 @@
-﻿<Window x:Class="GeZi.UpdatePromptWindow"
+<Window x:Class="GeZi.UpdatePromptWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
@@ -89,6 +89,7 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <Button Grid.Column="0" Content="忽略此版本" Click="OnIgnoreClick"
                             AutomationProperties.Name="忽略此版本"
@@ -99,7 +100,14 @@
                             AutomationProperties.Name="暂不更新"
                             Style="{StaticResource GhostButton}"
                             MinWidth="84" Margin="0,0,10,0"/>
-                    <Button Grid.Column="3" Content="前往下载" Click="OnDownloadClick"
+                    <Button Grid.Column="3" Content="直接下载" Click="OnDownloadClick"
+                            x:Name="DownloadBtn"
+                            AutomationProperties.Name="直接下载新版本"
+                            Style="{StaticResource GhostButton}"
+                            MinWidth="96" Margin="0,0,10,0"
+                            ToolTip="直接下载安装包（zip），下载完解压覆盖旧目录即可"/>
+                    <Button Grid.Column="4" Content="前往下载" Click="OnOpenPageClick"
+                            x:Name="OpenPageBtn"
                             AutomationProperties.Name="前往下载更新"
                             Style="{StaticResource GhostButton}"
                             MinWidth="96" ToolTip="在浏览器里打开 Release 页，下载最新安装包"/>

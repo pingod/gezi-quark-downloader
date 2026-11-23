@@ -134,6 +134,51 @@
     </Style>
 
     <!-- ============================================================
+         就地改名的输入框（2026-11-15）
+         ============================================================
+         解析历史 / 收藏夹里右键「重命名」后，名字那一行**原地**变成输入框
+         （光标竖杠 + 全选，直接打字就是覆盖）。
+
+         比 AppTextBox 紧凑：圆角小一点、内边距小一点、字号跟 HistoryNameText
+         对齐（13px），不然从文字切成输入框的一瞬间会「跳一下」（行高变了）。
+         -->
+    <Style x:Key="InlineEditTextBox" TargetType="TextBox" BasedOn="{StaticResource AppTextBox}">
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Padding" Value="6,2,6,3"/>
+        <Setter Property="MinHeight" Value="24"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <Border x:Name="Bd"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="6">
+                        <ScrollViewer x:Name="PART_ContentHost"
+                                      VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                      Focusable="False"
+                                      HorizontalScrollBarVisibility="{TemplateBinding HorizontalScrollBarVisibility}"
+                                      VerticalScrollBarVisibility="{TemplateBinding VerticalScrollBarVisibility}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush"
+                                    Value="{DynamicResource TextPrimaryBrush}"/>
+                            <Setter TargetName="Bd" Property="Effect">
+                                <Setter.Value>
+                                    <DropShadowEffect Color="{DynamicResource PrimaryColor}" BlurRadius="8"
+                                                      ShadowDepth="0" Opacity="0.3"/>
+                                </Setter.Value>
+                            </Setter>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ============================================================
          下拉框
          ============================================================ -->
     <Style x:Key="AppComboBox" TargetType="ComboBox">

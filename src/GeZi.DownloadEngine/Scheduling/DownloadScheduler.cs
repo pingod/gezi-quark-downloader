@@ -542,23 +542,62 @@ namespace GeZi.DownloadEngine
                     // 融合引擎：bezzad 调度框架 + 我们的分片/传输/落盘/校验零件。
                     // 它自己管分片并发，所以不走 using 块。
                     StorageMode resolvedMode = ResolveStorageMode(job);
-                    res = await FusionDownloader.DownloadAsync(
-                        job, leased, perFile, linked.Token, job.Pause,
-                        resolvedMode, FusionSequentialWindowBytes,
-                        job.Md5, job.Sha1, job.Sha256, Log,
-                        svc =>
-                        {
-                            // 登记到表里：UI 才能在下载过程中随时调整播放优先级。
-                            _activeServices[destKey] = svc;
-                            // 下单前就设过窗口的（用户先点播放再开始下载），这里补一次。
-                            long ps, pl;
-                            if (_playbackHints.TryGetValue(destKey, out ps))
+                    string nameForLog = job.Name;
+
+                    // 🚨🚨 2026-11-14 新增：**任务级自动重试**（用户硬要求「任何文件都不可以轻易说失败」）。
+                    //   原来这里失败就是失败：一次网络抖动（CDN 踢连接、直链过期、DNS 抽风）
+                    //   直接把整个任务判死，用户只能手动点重试或重开软件 —— 而重开软件后
+                    //   进度明明还在（.geziresume 完好），说明这次失败本来就不该是终局。
+                    //   现在失败后自动重试最多 3 次（间隔 3s / 8s），只有「重试也没意义」的
+                    //   失败类型才立刻收手（见 IsRetryableFailure）。
+                    //   续传不会重下：每次重试都从 .geziresume 的断点接着来。
+                    const int MaxAttempts = 3;
+                    for (int attempt = 1; ; attempt++)
+                    {
+                        res = await FusionDownloader.DownloadAsync(
+                            job, leased, perFile, linked.Token, job.Pause,
+                            resolvedMode, FusionSequentialWindowBytes,
+                            job.Md5, job.Sha1, job.Sha256, Log,
+                            svc =>
                             {
-                                _playbackHints.TryRemove(destKey, out pl);
-                                svc.SetPriorityWindow(ps, 64L * 1024 * 1024);
-                            }
-                        },
-                        Diagnostics).ConfigureAwait(false);
+                                // 登记到表里：UI 才能在下载过程中随时调整优先级。
+                                _activeServices[destKey] = svc;
+                                // 下单前就设过窗口的（用户先点播放再开始下载），这里补一次。
+                                long ps, pl;
+                                if (_playbackHints.TryGetValue(destKey, out ps))
+                                {
+                                    _playbackHints.TryRemove(destKey, out pl);
+                                    svc.SetPriorityWindow(ps, 64L * 1024 * 1024);
+                                }
+                            },
+                            Diagnostics).ConfigureAwait(false);
+
+                        if (res.Ok)
+                            break;
+                        // 用户取消 / 暂停到取消：立刻收手，绝不重试。
+                        if (linked.IsCancellationRequested)
+                            break;
+                        // 已经试满 3 次。
+                        if (attempt >= MaxAttempts)
+                            break;
+                        // 这类失败重试也没用（内容校验不符 / 磁盘满 / 没权限 / 文件不存在）。
+                        if (!IsRetryableFailure(res.Message))
+                            break;
+
+                        int delayMs = attempt == 1 ? 3000 : 8000;
+                        if (Log != null)
+                            Log("[重试] " + nameForLog + " 第 " + attempt + "/" + MaxAttempts
+                                + " 次失败（" + res.Message + "），"
+                                + (delayMs / 1000) + " 秒后自动重试，已下载部分会接着用，不会重下。");
+                        try
+                        {
+                            await Task.Delay(delayMs, linked.Token).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            break;
+                        }
+                    }
 
                     if (res.Ok)
                         // 把校验结果带到 UI：完成不等于“已验证”，用户要能一眼看到
@@ -598,6 +637,31 @@ namespace GeZi.DownloadEngine
                 sem.Release();
             }
         }
+
+        /// <summary>
+        /// 判断这次失败值不值得自动重试。
+        /// <para>
+        /// 判据基于引擎给的人话 Message（<c>FusionDownloader.DescribeFailure</c> 的产物）。
+        /// 只有「换条连接/换个时机就可能好」的失败才重试：网络类、直链类、超时类。
+        /// 内容校验不符、磁盘满、没权限、文件在服务器上已不存在 —— 重试纯粹浪费用户时间。
+        /// </para>
+        /// <para>
+        /// 这是**兜底**，不是主路径：真正的韧性在引擎内部（连接断开已纳入重试判据、
+        /// 停滞分片熔断转暂停）。这里只处理「整个任务级失败」的最后一道网。
+        /// </para>
+        /// </summary>
+        /// <summary>
+        /// 这次失败值不值得自动重试。
+        /// <para>
+        /// 🚨 2026-11-14：判据已统一到 <see cref="GeZi.Core.Support.RetryPolicy.IsRetryableFailure"/>，
+        /// 自检可以直接断言，也避免与 Fusion 那边各留一份慢慢漂移。
+        /// </para>
+        /// </summary>
+        private static bool IsRetryableFailure(string message)
+        {
+            return GeZi.Core.Support.RetryPolicy.IsRetryableFailure(message);
+        }
+
 
         private static void Report(IProgress<JobUpdate> progress, DownloadJob job, JobState state, string error = "")
         {

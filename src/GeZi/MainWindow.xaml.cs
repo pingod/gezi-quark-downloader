@@ -849,11 +849,36 @@ namespace GeZi
             {
                 try { Log(msg); } catch { }
             };
+            AdvisorStore.LogSink = msg =>
+            {
+                try { Log(msg); } catch { }
+            };
+            FavoriteStore.LogSink = msg =>
+            {
+                try { Log(msg); } catch { }
+            };
 
             // 迅雷取码器与「内嵌登录」窗口共用 profile-xunlei（deviceid 必须一致，
             // 不能换目录），而 WebView2 不允许同一用户数据目录开两个环境。
             // 登录窗口开着时让它先让路，别去抢一个必然失败的窗口。
             XunleiCaptchaFetcher.IsBlocked = () => _panWebLoginOpen;
+
+            // 迅雷的 captcha 和「签发它的那台设备」是绑定的：配置文件里存的设备号
+            // 是上一次网页登录时的，可能是旧的 ⇒ 取到新设备号就回写，
+            // 下次启动不用再拿旧设备号去试错。
+            XunleiCaptchaFetcher.DeviceIdSink = dev =>
+            {
+                try
+                {
+                    if (string.IsNullOrEmpty(dev) || _settings == null)
+                        return;
+                    if (string.Equals(_settings.XunleiWebDeviceId, dev, StringComparison.Ordinal))
+                        return;
+                    _settings.XunleiWebDeviceId = dev;
+                    SettingsStore.Save(_settings);
+                }
+                catch { }
+            };
 
             // 确定一个「真正可写」的下载目录：已保存的 → 真实下载目录 → 本地应用数据目录 → 程序目录
             string resolved = null;

@@ -905,10 +905,22 @@ namespace GeZi
                   // 过期了就不能再带上，否则反而被判无效。
                   var cap='';
                   try{
-                    var c=parseObj(raw('captcha_'+CID));
-                    if(c&&c.token){
-                      var exp=c.expires_at?Date.parse(c.expires_at):0;
-                      if(!exp||exp>Date.now()) cap=good(''+c.token);
+                    // 2026-11-15: CID 不能写死 —— 迅雷网页不同入口签发的 aud 不同，
+                    // localStorage 里的键名是 captcha_<aud>，写死默认 CID 在 aud 不是它时
+                    // 就读不到对应体系的 captcha。所以先试默认键，再扫所有 captcha_ 前缀的键。
+                    var ckeys=[];
+                    ckeys.push('captcha_'+CID);
+                    var allks=allKeys();
+                    for(var q=0;q<allks.length;q++){
+                      var qk=(''+allks[q]);
+                      if(qk.lastIndexOf('captcha_',0)===0) ckeys.push(qk);
+                    }
+                    for(var r=0;r<ckeys.length && !cap;r++){
+                      var c=parseObj(raw(ckeys[r]));
+                      if(c&&c.token){
+                        var exp=c.expires_at?Date.parse(c.expires_at):0;
+                        if(!exp||exp>Date.now()) cap=good(''+c.token);
+                      }
                     }
                   }catch(e){}
                   // deviceid 必须用网页自己那份：网页把它存在

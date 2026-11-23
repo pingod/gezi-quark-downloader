@@ -14,6 +14,7 @@
 using System;
 using System.Reflection;
 using System.Threading.Tasks;
+using System.Windows;
 using GeZi.Services;
 using GeZi.Providers;
 using GeZi.Providers.Quark;
@@ -218,6 +219,14 @@ namespace GeZi
             Latest = (found != null && found.IsValid) ? found : null;
             s.UpdateLatestVersion = Latest != null ? Latest.Version.ToString() : "";
             HasUpdate = ComputeHasUpdate(s.UpdateLatestVersion, s.UpdateIgnoredVersion, CurrentVersion);
+
+            // 🚨 2026-11-15 修「启动检查找到新版本后从不落盘」：
+            //   原来只改了内存里的 s.UpdateLatestVersion，没写文件 ⇒
+            //   部署区 GeZi.config.xml 里 UpdateLatestVersion 一直停在旧值（2.4.0），
+            //   跨会话的红点/状态全靠那个旧值 ⇒ 明明发了新版，程序却不知道。
+            //   ⇒ 落盘（SettingsStore.Save 内部有锁，重复写安全）。
+            //   ⚠️ 必须在 UI 线程调用（本类约定：改 AppSettings 的方法只走 UI 线程）。
+            try { SettingsStore.Save(s); } catch { }
 
             if (HasUpdate && onNewUpdate != null)
                 onNewUpdate(Latest);

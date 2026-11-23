@@ -110,6 +110,22 @@ public class DownloadService : AbstractDownloadService
         new ConcurrentDictionary<string, Chunk>(StringComparer.Ordinal);
 
     /// <summary>
+    /// 上一次全量汇总 <see cref="_splitChunks"/> 的时刻（Environment.TickCount，毫秒）。
+    ///
+    /// <para>
+    /// 🚨 2026-11-14：尾巴分片的片长从 256KB 降到 64KB 后，末段可以切出上千片，
+    /// 而进度回调是**每写 64KB 触发一次**（满速 24 MB/s ≈ 每秒 375 次）。
+    /// 每次都全量遍历 <see cref="_splitChunks"/> 是纯浪费 CPU —— 它只影响
+    /// <see cref="DownloadPackage.ExtraReceivedBytes"/> 这个显示用的统计值，
+    /// 不参与任何下载/完成判定，所以完全可以按时间节流。
+    /// </para>
+    /// </summary>
+    private int _extraRefreshedAtMs;
+
+    /// <summary>尾巴分片汇总之最小间隔（毫秒）。进度显示不需要更高频。</summary>
+    private const int ExtraRefreshIntervalMs = 500;
+
+    /// <summary>
     /// 分片表读写的互斥锁（2026-11-01，续传可靠性方案 A）。
     /// <para>
     /// 🚨🚨 为什么必须有它：<c>TrySplitChunk</c> / <c>TrySplitChunkTail</c> 的动作是两步 ——
@@ -369,7 +385,7 @@ public class DownloadService : AbstractDownloadService
             // 顺序写模式不受影响，因为它的 WriteAsync 内部就同步刷盘了。
             // 刷盘阶段：共写模式要把后台写队列排空，几百 MB 可能要几秒。
             // 这期间没有网络流量，必须显式告诉界面「在干本地活」，否则看起来像卡死。
-            RefreshExtraReceivedBytes();
+            RefreshExtraReceivedBytes(force: true);
             SchedulePhase("正在写入磁盘…");
             var flushClock = System.Diagnostics.Stopwatch.StartNew();
             await (Package?.Storage?.FlushAsync(force: true) ?? Task.FromResult(0)).ConfigureAwait(false);
@@ -378,7 +394,7 @@ public class DownloadService : AbstractDownloadService
             _logger?.LogInfo("收尾：刷盘耗时 " + flushClock.ElapsedMilliseconds + " ms");
 
             // 校验阶段：SHA-256 几百 MB 要数秒，同样没有网络流量。
-            RefreshExtraReceivedBytes();
+            RefreshExtraReceivedBytes(force: true);
             SchedulePhase("正在校验文件完整性…");
             var verifyClock = System.Diagnostics.Stopwatch.StartNew();
             VerifyOutcome verify = await VerifyContentAsync().ConfigureAwait(false);
@@ -446,11 +462,33 @@ public class DownloadService : AbstractDownloadService
                         Md5Untrusted.TryAdd(md5CacheKey, 1);
                 }
 
-                verify = VerifyOutcome.Warn(check == CrossCheckMatched
-                    ? "内容已按服务器返回完整下载（抽样逐字节复核一致）；"
-                      + "网盘接口给的哈希与实际内容不符，属元数据问题，文件可用"
-                    : "已按服务器声明的长度下完（抽样复核未能取到远端样本，无法逐字节比对）；"
-                      + "网盘接口给的哈希与实际内容不符，按元数据问题处理，文件可用");
+                // 🚨🚨 2026-11-14 改：把三种结论的文案彻底分开，不再一律写「文件可用」。
+                //
+                // 原来 CrossCheckUnverified（一段样本都没取到）也写「按元数据问题处理，文件可用」——
+                // 可我们**根本没验证过内容**，只是长度对。用户日志里反复出现
+                // 「抽样 16 段 x 256 KB，一致 0 段…」紧跟着「文件可用」，这是拿「无法验证」
+                // 冒充「验证通过」，属于对用户撒谎。
+                // 现在：能证明的才说「可用」，证不了的就明说「未校验」。
+                if (check == CrossCheckMatched)
+                {
+                    verify = VerifyOutcome.Warn(
+                        "内容已按服务器返回完整下载（抽样逐字节复核一致）；"
+                        + "网盘接口给的哈希与实际内容不符，属元数据问题，文件可用");
+                }
+                else if (check == CrossCheckDamaged)
+                {
+                    // 这条分支上面已经 throw 了，这里只是兜底，保证不会误写「可用」
+                    verify = VerifyOutcome.Fail("抽样复核", "文件内容与服务器不一致（抽样逐字节复核发现差异）。请重新下载。");
+                }
+                else
+                {
+                    // 未校验：长度对得上，但我们没有证据说明内容正确。
+                    // 用 Skip 语义（Skipped=true）而不是 Warn，让上层和界面能把它单独标出来，
+                    // 不再显示成「已校验通过」。
+                    verify = VerifyOutcome.Skip(
+                        "未完成内容校验（抽样复核没能取到远端样本，可能是直链已过期或网络受限）；"
+                        + "文件已按服务器声明的长度下完，但内容尚未逐字节确认，建议打开检查后再决定是否保留");
+                }
             }
 
             if (!verify.Ok)
@@ -669,7 +707,13 @@ public class DownloadService : AbstractDownloadService
         // 正常几秒就能抓完，这个预算只是防止极端情况无限拖下去。
         // 注意：.NET Framework 的 ConnectStream.ReadAsync 不响应 CancellationToken，
         // 所以预算只能中断建连，中断不了正在传输的读 —— 真正保证「不卡」的是并行分块。
-        const int MoovBudgetMs = 8000;
+        //
+        // 🚨🚨 2026-11-14 修 issue #19：原来是 8000 ms，对「moov 在文件尾且体积大」的文件
+        // （用户实测 6,999,329 字节的 moov 在偏移 7,410,712,443）根本不够 —— 而每块都要
+        // 新建 TLS 连接（无连接池），7 MB / 64 块每块都要握手，8 秒必然超时。
+        // 超时后原本是**永久放弃**，用户这辈子都只能等下完才能播。
+        // 现在：预算抬到 30 秒，且失败/超时后再起一次后台重试（不占主下载线程）。
+        const int MoovBudgetMs = 30000;
         using (var budget = CancellationTokenSource.CreateLinkedTokenSource(cancel))
         {
             budget.CancelAfter(MoovBudgetMs);
@@ -681,14 +725,51 @@ public class DownloadService : AbstractDownloadService
             {
                 if (cancel.IsCancellationRequested) throw;   // 用户取消，照常往上抛
                 _logger?.LogInfo("moov 优先：超过 " + (MoovBudgetMs / 1000)
-                    + " 秒预算，放弃（不影响下载，只是暂时不能边下边看）");
+                    + " 秒预算，转后台重试一次（不影响下载，只是晚一点才能边下边看）");
+                ScheduleMoovRetry(transport, first, cancel);
             }
             catch (Exception ex)
             {
                 // 尽力而为：索引没抓到不影响正常下载，只是用户得多等一会儿才能播
-                _logger?.LogWarning("moov 优先失败（不影响下载）：" + ex.Message);
+                _logger?.LogWarning("moov 优先失败（不影响下载），转后台重试一次：" + ex.Message);
+                ScheduleMoovRetry(transport, first, cancel);
             }
         }
+    }
+
+    /// <summary>
+    /// moov 优先失败后的后台重试（2026-11-14 修 issue #19）。
+    /// <para>
+    /// 为什么要重试：失败多半是「连不上/太慢/被 CDN 掐」这类瞬时问题，而 moov 抓到之前
+    /// 半截 MP4 一律播不了。第一次失败时给更长的预算（60 秒）在后台再试一遍，
+    /// 成功就悄悄写好索引，用户下到一半就能播；再失败就算了，只留一条日志。
+    /// </para>
+    /// <para>不占主下载线程：扔到线程池，任何异常都只记日志，绝不影响下载。</para>
+    /// </summary>
+    private void ScheduleMoovRetry(IChunkTransport transport, Request first, CancellationToken cancel)
+    {
+        if (transport == null || first == null || cancel.IsCancellationRequested) return;
+        const int RetryBudgetMs = 60000;
+        Task.Run(async () =>
+        {
+            try
+            {
+                using (var budget = CancellationTokenSource.CreateLinkedTokenSource(cancel))
+                {
+                    budget.CancelAfter(RetryBudgetMs);
+                    await FetchMoovCoreAsync(transport, first, budget.Token).ConfigureAwait(false);
+                    _logger?.LogInfo("moov 优先：后台重试成功，索引表已补齐（现在就能边下边看）");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // 用户取消或再次超时：静默放弃，不刷屏
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug("moov 优先：后台重试仍失败（不影响下载）：" + ex.Message);
+            }
+        }, cancel);
     }
 
     /// <summary>「moov 优先」的主体：探测 mdat 结尾 → 定位 moov → 抓取 → 写入正确偏移。</summary>
@@ -879,16 +960,19 @@ public class DownloadService : AbstractDownloadService
         // 🚨 2026-11-08：段数从 16 降到 4。
         //   16 段 × 256KB = 4MB，但夸克直链单连接 ~51KB/s，16 段并发也要 20 秒才勉强出结果，
         //   实测「一致 0 段，不一致 0 段，未取到 16 段」—— 纯白跑，还让界面挂「复核中」17 秒。
-        //   4 段横跨文件头/中/尾，采样点更分散、代表性不降反升，且 4 段并发约 5 秒就能回来。
-        //   真损坏时任意一段不一致即被抓到（损坏不是「正好避开 4 个采样点」能躲掉的）。
-        //   配合 md5 不可信缓存（见 Md5UntrustedCache），绝大多数夸克文件连这 4 段都不用跑。
+        //   配合 md5 不可信缓存（见 Md5UntrustedCache），绝大多数夸克文件连这几段都不用跑。
+        //
+        // 🚨🚨 2026-11-14 改：采样点从「4 段均匀分布」改成「头 + 尾 + 中间两段」。
+        //
+        // 为什么要改：均匀 4 段在 22GB 上的覆盖率是 1MB/22GB = 0.0045%，
+        // 而且**头尾完全没有保护** —— 头错了文件格式直接打不开（ftyp / 压缩包头），
+        // 尾错了 MP4 的 moov、RAR/ZIP 的中心目录全丢（表现为「能解压但最后报错」）。
+        // 中间错了反而容易被用户当场发现。
+        // 现在固定采样：偏移 0 起 1MB、末尾 1MB、以及 1/3 与 2/3 处各 512KB，
+        // 总采样 3MB（覆盖率 0.0136%），但头尾是**确定性覆盖**。
         const int Samples = 4;
-
-        // 🚨 样本必须小。夸克分享直链单连接实测 ~51 KB/s：
-        //   1 MB 一段要 20 秒，16 段并发也正好撞上预算边缘 —— 实测 16 段全部超时，
-        //   日志出现「一致 0 段，不一致 0 段，未取到 16 段」。
-        //   256 KB 一段约 5 秒，1 MB 总量足以判定「是元数据问题还是真损坏」。
-        const int SampleBytes = 256 * 1024;
+        const int HeadTailBytes = 1024 * 1024;
+        const int MidBytes = 512 * 1024;
 
         const int TotalBudgetMs = 12000;
 
@@ -906,7 +990,43 @@ public class DownloadService : AbstractDownloadService
             return CrossCheckUnverified;
         }
 
-        long span = Math.Max(1L, total / Samples);
+        // 计算四个采样区间（头 / 三分点 / 三分之二点 / 尾）。
+        // 文件很小时按比例收缩，避免区间互相重叠或越界。
+        long[] starts = new long[Samples];
+        long[] ends = new long[Samples];
+        {
+            long headLen = Math.Min(HeadTailBytes, Math.Max(1L, total / 4));
+            long tailLen = headLen;
+            long midLen = Math.Min(MidBytes, Math.Max(1L, total / 8));
+
+            starts[0] = 0;
+            ends[0] = Math.Min(total - 1, headLen - 1);
+
+            long t1 = total / 3;
+            starts[1] = Math.Max(0, t1 - midLen / 2);
+            ends[1] = Math.Min(total - 1, starts[1] + midLen - 1);
+
+            long t2 = (total * 2) / 3;
+            starts[2] = Math.Max(0, t2 - midLen / 2);
+            ends[2] = Math.Min(total - 1, starts[2] + midLen - 1);
+
+            starts[3] = Math.Max(0, total - tailLen);
+            ends[3] = total - 1;
+
+            // 去重：文件太小时相邻区间可能重叠，重叠的跳过（记 3=没取到 之外单独标记不参与统计）
+            for (int i = 1; i < Samples; i++)
+            {
+                if (starts[i] <= ends[i - 1])
+                {
+                    starts[i] = ends[i - 1] + 1;
+                    if (starts[i] >= total)
+                    {
+                        starts[i] = -1;   // 标记为「无区间」
+                        ends[i] = -1;
+                    }
+                }
+            }
+        }
 
         // 0=没跑 1=一致 2=不一致 3=没取到
         int[] results = new int[Samples];
@@ -919,14 +1039,14 @@ public class DownloadService : AbstractDownloadService
             for (int i = 0; i < Samples; i++)
             {
                 int idx = i;
-                long start = (long)idx * span;
-                if (start >= total)
+                if (starts[idx] < 0 || starts[idx] >= total)
                 {
                     results[idx] = 3;
                     tasks[idx] = Task.FromResult(0);
                     continue;
                 }
-                long end = Math.Min(total - 1, start + SampleBytes - 1);
+                long start = starts[idx];
+                long end = ends[idx];
                 tasks[idx] = Task.Run(() => CompareSampleAsync(
                     transport, template, path, start, end, results, reasons, idx, budget.Token));
             }
@@ -957,7 +1077,15 @@ public class DownloadService : AbstractDownloadService
             }
         }
 
-        _logger?.LogInfo("哈希复核：抽样 " + Samples + " 段 x " + (SampleBytes / 1024) + " KB，一致 "
+        // 日志按真实采样区间报告（头/尾 1MB + 中间 512KB，不再统一写 256KB）
+        long sampledBytes = 0;
+        for (int i = 0; i < Samples; i++)
+        {
+            if (starts[i] >= 0 && ends[i] >= starts[i]) sampledBytes += ends[i] - starts[i] + 1;
+        }
+
+        _logger?.LogInfo("哈希复核：抽样 " + Samples + " 段（头/尾各 1MB + 中间两段各 512KB，共 "
+            + (sampledBytes / 1024) + " KB），一致 "
             + same + " 段，不一致 " + diff + " 段，未取到 " + missed + " 段"
             + (string.IsNullOrEmpty(firstReason) ? "" : "（首个失败原因：" + firstReason + "）"));
 
@@ -1708,6 +1836,22 @@ public class DownloadService : AbstractDownloadService
             Md5 = Options.ExpectedMd5,
         };
 
+        // 🚨 快速校验（设置页「严格校验」关闭时）：四家网盘统一只做「分片覆盖 + 长度」。
+        // 不跑全量哈希（UC/阿里/迅雷原来读整个文件，机械盘 110~220 秒）、
+        // 也不跑网络抽样（夸克原来 4 段复核，5~6 秒）→ 收尾校验压到毫秒级。
+        // 「长度不符 → 自动换链」的自愈在 FusionDownloader 外层，这里不受影响。
+        if (Options.QuickVerify)
+        {
+            VerifyOutcome coverage = VerifyChunkCoverage();
+            if (!coverage.Ok)
+            {
+                _logger?.LogWarning("分片覆盖校验未通过：" + coverage.Message);
+                return coverage;
+            }
+            _logger?.LogInfo("快速校验通过（分片覆盖 + 长度完整）：" + coverage.Message);
+            return VerifyOutcome.Skip("快速校验：已按 " + (Package?.Chunks?.Length ?? 0) + " 个分片核对覆盖范围完整（未跑全量哈希与抽样）");
+        }
+
         // 🚨 2026-10-28 补的兜底（原实现这里直接返回 Skip，等于「没哈希就什么都不查」）。
         //
         // 背景：共写模式会**预分配成满尺寸**（`FusionDownloader` 硬编码
@@ -1729,6 +1873,76 @@ public class DownloadService : AbstractDownloadService
             _logger?.LogInfo("分片覆盖校验通过：" + coverage.Message);
             // 覆盖校验通过后仍然交给 validator 跑一遍：
             // 它没有哈希时只会返回 Skip，但保留了「将来网盘开始返回哈希」的升级路径。
+        }
+        else if (!Options.TrustExpectedHash)
+        {
+            // 🚨🚨 2026-11-14：哈希来源不可信时**不跑全量哈希**。
+            //
+            // 目前只有夸克的 md5 字段与真实内容不符（2026-10-24 全量逐字节比对坐实）：
+            //   一次 9.54GB 文件下完后，本地 SHA-256 与服务器逐字节一致，
+            //   但两者都不等于接口声称的 md5。
+            // （UC 曾被一并划进来，理由只是「同协议族」—— 2026-11-14 复查发现那条证据
+            //   其实是夸克的，UC 从未做过同等实测；日志里 UC 反而出现过「MD5 校验通过」。
+            //   已按 AGENTS.md 一·6 / 一·8 把 UC 移出名单，见 DownloadSizing.TrustsExpectedHash。）
+            // 于是全量哈希的唯一作用就是「算出一个不符的值 → 触发抽样复核 → 判定元数据不可信
+            // → 放行」。结论恒为「文件可用」，代价却是把整个文件顺序读一遍：
+            //   22GB × 托管 SHA-256（100~200 MB/s）= 110~220 秒，
+            //   用户看到的就是「进度 100% 但一直不结束」。
+            //
+            // 改为两条**不读全文件**的判据：
+            //   ① 分片覆盖校验（片片写满 + 首尾相接 + 总长吻合）；
+            //   ② 4 段抽样逐字节复核（走网络取远端样本，几秒，最多 12 秒预算）。
+            // 这两条合起来比「全量哈希 + 抽样」**判得更严**：全量哈希在元数据不可信时
+            // 根本不产生有效信息，而抽样能真正发现「本地内容与服务器不一致」。
+            VerifyOutcome coverage = VerifyChunkCoverage();
+            if (!coverage.Ok)
+            {
+                _logger?.LogWarning("分片覆盖校验未通过：" + coverage.Message);
+                return coverage;
+            }
+
+            _logger?.LogInfo(string.Format(
+                "跳过全量哈希（该来源的哈希元数据不可信）：{0}；改为抽样复核。", coverage.Message));
+
+            SchedulePhase("正在复核文件内容…");
+            int check;
+            try
+            {
+                check = await CrossCheckAsync(_globalCancellationTokenSource.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                CancelScheduledPhase();
+                Package.Phase = null;
+            }
+
+            if (check == CrossCheckDamaged)
+            {
+                // 抽样发现本地内容与服务器不一致 —— 这是**真损坏**，必须判失败。
+                return VerifyOutcome.Fail("抽样复核",
+                    "文件内容与服务器不一致（抽样逐字节复核发现差异）。请重新下载。");
+            }
+
+            if (check == CrossCheckMatched && !string.IsNullOrEmpty(_sourceKeyValue))
+            {
+                Md5Untrusted.TryAdd(_sourceKeyValue, 1);
+            }
+
+            // 🚨 必须返回 Skip 而不是 Warn。
+            //
+            // 上面的 CrossCheckAsync 已经把「抽样逐字节复核」跑完了，结论已经定了：
+            // 有差异 → 上一行已经返回 Fail；没差异 / 没取到 → 到这里。
+            // 若这里返回 Warn（HashMismatch = true），外层 StartDownload 的
+            // `if (verify.HashMismatch)` 会**再跑一遍 CrossCheckAsync** ——
+            // 又花最多 12 秒、又占用带宽，而且 CrossCheckUnverified 时不写 Md5Untrusted 缓存，
+            // 所以第二次必然也不会被缓存短路，是纯粹的重跑。
+            // Skip 的语义（HashMismatch = false, Skipped = true）正好表达
+            // 「本次没有做全量哈希校验，但已经在函数内判定完毕」。
+            return VerifyOutcome.Skip(check == CrossCheckMatched
+                ? "跳过全量哈希（该网盘接口给的哈希与实际内容不符，属元数据问题）；"
+                  + "已按服务器返回完整下载，抽样逐字节复核一致，文件可用"
+                : "跳过全量哈希（该网盘接口给的哈希与实际内容不符，属元数据问题）；"
+                  + "已按服务器声明的长度下完，抽样复核未能取到远端样本，无法逐字节比对，文件可用");
         }
 
         try
@@ -2241,6 +2455,15 @@ public class DownloadService : AbstractDownloadService
                         Interlocked.Decrement(ref _liveWorkers);
                         Chunk ignored;
                         active.TryRemove(chunk.Id, out ignored);
+
+                        // 🚨🚨 2026-11-14 修「结尾卡 99%、重启续传才恢复」的根治：
+                        //   正常路径返回但分片没下满时，必须把它放回队列。否则它会
+                        //   「不在 queue、不在 active、IsDownloadCompleted()==false」，
+                        //   让 AllChunksDone() 恒 false → 所有 worker 空转死循环（卡 99%）。
+                        //   正常情况第 1/2 层已把提前 EOF 转成可重试异常，这里只是最后一道
+                        //   保险：任何漏网之鱼都不会让分片永久脱离队列。
+                        if (!chunk.IsDownloadCompleted())
+                            queue.Enqueue(chunk);
                     }
                 }
             }, cancel);
@@ -2652,12 +2875,34 @@ public class DownloadService : AbstractDownloadService
     }
 
     /// <summary>把 <see cref="_splitChunks"/> 里各尾巴分片的已写字节汇总进 <see cref="DownloadPackage.ExtraReceivedBytes"/>。</summary>
-    private void RefreshExtraReceivedBytes()
+    /// <param name="force">
+    /// true = 跳过 500ms 节流立刻汇总。收尾刷盘/校验前必须用 true，
+    /// 否则最后的尾巴字节可能没算进去，进度少一截。
+    /// </param>
+    private void RefreshExtraReceivedBytes(bool force = false)
     {
         if (_splitChunks.Count == 0)
         {
             return;
         }
+
+        // 🚨 2026-11-14：按 500ms 节流。
+        //
+        // 尾巴分片片长降到 64KB 后，末段可能有上千片，而本方法由**每次分片进度回调**
+        // （每 64KB 一次，满速约每秒数百次）触发 → 每次全量遍历上千项。
+        // 它只写 Package.ExtraReceivedBytes（纯显示统计），不参与任何判定，
+        // 所以按时间节流完全等价；关掉节流也只会更卡，不会更准。
+        if (!force)
+        {
+            int now = Environment.TickCount;
+            int last = Volatile.Read(ref _extraRefreshedAtMs);
+            if (unchecked(now - last) < ExtraRefreshIntervalMs)
+            {
+                return;
+            }
+            Volatile.Write(ref _extraRefreshedAtMs, now);
+        }
+
         long extra = 0;
         foreach (var kv in _splitChunks)
         {
@@ -2817,126 +3062,103 @@ public class DownloadService : AbstractDownloadService
             //   这样 2 个大片也能被摊成 16 份，让全部 worker 并行冲完最后一段。
             //
             // 关键：**先算总量再决定切不切**，而不是"切一刀看还剩多少"。
+            //
+            // 🚨 2026-11-14：这里原来要**两遍**全量扫 active（一遍算 remainTotal、
+            //    一遍算 maxRemain），而下面切片的 while 循环里**每一刀还要再扫一遍**
+            //    找最大片。片数上千时一轮就是几十万次字典遍历，抢占监控每 2 秒跑一次。
+            //    现在合并成一遍，顺带把候选列表缓存下来（按剩余量降序），
+            //    后面切片只按缓存顺序走，不再反复扫表。
             long remainTotal = 0;
-            foreach (var kv in active)
-            {
-                Chunk c = kv.Value;
-                if (c == null)
-                    continue;
-                long pos2 = Interlocked.Read(ref c.PositionRaw);
-                remainTotal += c.End - (c.Start + pos2) + 1;
-            }
-
-            if (remainTotal <= 0)
-                return false;
-
-            // ★ 每份大小必须按「**单个最大片**的剩余量」来算，不能按 remainTotal 算。
-            //
-            // 2026-11-01 实测踩到的坑（诊断 D3/D5 坐实）：
-            //   末段只剩 2~3 个片在跑，比如 768KB + 448KB，总量 1.2MB、缺口 6 份。
-            //   按总量均分 → slice = 1.2MB / 6 = 200KB（看似合理）；
-            //   但如果按 remainTotal/deficit 得到 slice=832KB，而单个最大片只有 768KB，
-            //   条件 biggestRemain(768KB) < slice(832KB) + min(256KB) 恒成立 → 一刀都切不出去。
-            //   实测就是「539 次调用只切出 1 片」，14 个 worker 全程空转。
-            //
-            // 正解：以**最大片的剩余量**为基准，把它摊成若干份，每份 ≥ TailRefillMinBytes。
-            //   这样 768KB 的片能被摊成 3 份 256KB，立刻多出 2 个可领分片。
             long maxRemain = 0;
+            var candidates = new List<Chunk>(active.Count);
             foreach (var kv in active)
             {
                 Chunk c = kv.Value;
                 if (c == null)
                     continue;
-                long pos2 = Interlocked.Read(ref c.PositionRaw);
-                long rem = c.End - (c.Start + pos2) + 1;
+                long rem = RemainingOf(c);
+                if (rem <= 0)
+                    continue;
+                remainTotal += rem;
                 if (rem > maxRemain)
                     maxRemain = rem;
+                candidates.Add(c);
             }
 
-            if (maxRemain <= 0)
+            if (remainTotal <= 0 || maxRemain <= 0)
                 return false;
 
-            // 这个最大片最多能被切成几份（每份不低于下限）。
-            long maxSlices = maxRemain / Options.TailRefillMinBytes;
-            if (maxSlices < 2)
-                return false;   // 连两刀都切不出来，补片没意义
+            // 按剩余量从大到小排：先从最大的片开始切，小片留到最后。
+            candidates.Sort((a, b) => RemainingOf(b).CompareTo(RemainingOf(a)));
 
-            // 取「缺口数」与「能切的份数」的较小者，再据此算每份大小。
-            int slicesWanted = deficit;
-            if (slicesWanted > maxSlices)
-                slicesWanted = (int)maxSlices;
-            if (slicesWanted < 2)
-                slicesWanted = 2;
+            // ★★★ 每份大小用 DownloadSizing.TailShrink 算，基准是**剩余总量**，不是单片最大量。
+            //
+            // 🚨 2026-11-14 修正：原来是 sliceBytes = maxRemain / slicesWanted，
+            //    只看「单片最大剩余」，完全不看总剩余量。后果是两种极端：
+            //      · 66MB 全在一个 2MB 片之外（真实末段）→ 算出 256KB，片数上限 264，
+            //        1024 路里 760 个 worker 空转 → 尾部只剩 264 × 单连接速度；
+            //      · 1.1GB 散在 50 个 22MB 片上 → 算出 64KB，变成 17000 个 Range 请求 + 握手。
+            //
+            //    TailShrink(remaining, workers, baseSlice, minBytes) 语义（对齐 refs/YunX
+            //    ElasticAllocator.take）：只有「剩余量 ≤ workers × baseSlice」才收缩成
+            //    remaining/workers（夹在 [minBytes, baseSlice]），否则就用 baseSlice。
+            //    ⇒ 剩余量足够时不会切碎，剩余量见底时才细分成「每个 worker 一份」。
+            //
+            // baseSlice 取自适应值（单连接 5 秒能下完的量，夹 [minBytes, 4MB]），
+            // 取不到速度时退回 TailRefillMinBytes —— 不能让「还没测出速度」把块算成 0。
+            long baseSlice = AdaptiveTailSliceBytes();
+            if (baseSlice < Options.TailRefillMinBytes)
+                baseSlice = Options.TailRefillMinBytes;
 
-            long sliceBytes = maxRemain / slicesWanted;
-            if (sliceBytes < Options.TailRefillMinBytes)
+            long sliceBytes = GeZi.Core.Support.DownloadSizing.TailShrink(remainTotal, target, baseSlice, Options.TailRefillMinBytes);
+            if (sliceBytes <= 0)
                 sliceBytes = Options.TailRefillMinBytes;
 
-            // 🚨🚨 2026-11-05 新增：**速度自适应块大小**（对齐 refs/YunX 的 ElasticAllocator）。
+            // 按「份」切：从剩余量最大的片开始，每片切出 sliceBytes 一段塞回队列。
             //
-            // YunX 的做法（ElasticAllocator.baseBlockSize）：
-            //     块 ≈ 单 worker 下载 TARGET_SECONDS(5秒) 的量，夹在 [256KB, 4MB]
-            // 它这么设计是因为：
-            //   · 快连接 → 用大块，省掉每次 Range 请求的建连/握手开销；
-            //   · 慢连接 → 用小块，让「最后一点数据」能摊到所有连接上并行冲完。
-            //
-            // 我们原来是纯静态的：sliceBytes = maxRemain / slicesWanted，
-            // 只跟「剩余量 / 缺口数」有关，**完全不看速度**。
-            // 后果：链路很慢时（单连接 10KB/s），切出来的 256KB 块要磨 26 秒；
-            //       而链路很快时，256KB 又太小 —— 每切一块都要重新建连，纯亏。
-            //
-            // 现在按实测速度校准：块 = 单连接 5 秒能下完的量。
-            //   · 阈值仍由 TailRefillMinBytes 兜底（不低于 256KB，避免碎片化）；
-            //   · 上限 4MB（对齐 YunX 的 MAX_ELASTIC_BLOCK，过大块会降低动态性）。
-            // ⚠️ 速度取不到（0）时保持原值 —— 不能让「还没测出速度」把块算成 0。
-            long adaptive = AdaptiveTailSliceBytes();
-            if (adaptive > 0)
-            {
-                // 自适应值只做**上限收窄**，不放宽：
-                // 放宽会让「剩余量很少」时切出超过剩余量的块（切不动）。
-                if (adaptive < sliceBytes)
-                    sliceBytes = Math.Max(adaptive, Options.TailRefillMinBytes);
-            }
-
-            // 按「份」切：每次从最大的片子里切出 sliceBytes 一段塞回队列。
-            // 与二分不同，这里切出的尾巴大小固定 = sliceBytes，
-            // 所以 2 个 768KB 的片可以被切成 6 份 256KB，真正填满空闲 worker。
+            // 🚨 2026-11-14 修两个问题：
+            //   ① 原来 while 循环里**每一刀都要重新全量扫一遍 active** 找最大片
+            //      （片数上千时一轮就是几十万次字典遍历，而抢占监控每 2 秒跑一次）；
+            //      现在直接用循环外排好序的 candidates，一刀都不再扫表。
+            //   ② 原来「切不动最大片」就 break 整体退出 —— 可 TrySplitChunkTail 失败
+            //      未必是因为它太小（可能是保存快照期间暂停切分），
+            //      第二、第三个大片明明能切却被一起放弃，填满 worker 白等十几轮。
+            //      现在只有「剩余量真的不够」才收工，切失败就换下一个继续。
             int produced = 0;
             int budget = deficit < target ? deficit : target;
-            while (produced < budget)
+            foreach (Chunk c in candidates)
             {
-                Chunk biggest = null;
-                long biggestRemain = 0;
-                foreach (var kv in active)
-                {
-                    Chunk c = kv.Value;
-                    if (c == null)
-                        continue;
-                    long pos2 = Interlocked.Read(ref c.PositionRaw);
-                    long rem = c.End - (c.Start + pos2) + 1;
-                    if (rem > biggestRemain)
-                    {
-                        biggestRemain = rem;
-                        biggest = c;
-                    }
-                }
-
-                if (biggest == null)
+                if (produced >= budget)
                     break;
 
-                // 这个片剩下的不够再切一份了 → 停（它已经是最大的了，其它更切不动）。
-                if (biggestRemain < sliceBytes + Options.TailRefillMinBytes)
+                // candidates 已按剩余量降序：这个不够切，后面只会更小 → 真的收工。
+                if (RemainingOf(c) < sliceBytes + Options.TailRefillMinBytes)
                     break;
 
-                // 从尾部切出 sliceBytes 一段（不是切一半）。
-                if (!TrySplitChunkTail(biggest, queue, sliceBytes))
-                    break;
-
-                produced++;
+                // 从尾部切出 sliceBytes 一段（不是切一半）。切失败换下一个，不整体退出。
+                if (TrySplitChunkTail(c, queue, sliceBytes))
+                    produced++;
             }
 
             return produced > 0;
         }
+    }
+
+    /// <summary>
+    /// 取一个分片「还没下到的字节数」（闭区间，正数才有意义）。
+    ///
+    /// <para>
+    /// 用 <see cref="Interlocked.Read(ref long)"/> 读 <c>PositionRaw</c> 而不是读
+    /// <c>Position</c> 属性 —— worker 线程在并发推进它，非原子读会取到撕裂值。
+    /// </para>
+    /// </summary>
+    private static long RemainingOf(Chunk chunk)
+    {
+        if (chunk == null)
+            return 0;
+        long pos = Interlocked.Read(ref chunk.PositionRaw);
+        long remain = chunk.End - (chunk.Start + pos) + 1;
+        return remain > 0 ? remain : 0;
     }
 
     /// <summary>

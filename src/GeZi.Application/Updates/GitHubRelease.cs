@@ -46,6 +46,12 @@ namespace GeZi.Services
         /// <summary>安装包字节数（从 assets 里挑 <c>GeZi-*-win64.zip</c>）；取不到为 0。</summary>
         public long AssetSize { get; set; }
 
+        /// <summary>
+        /// 安装包的直链（GitHub 的 <c>browser_download_url</c>）；取不到为空串。
+        /// 「直接下载安装包」用它；为空时只能退回 Release 详情页。
+        /// </summary>
+        public string AssetUrl { get; set; }
+
         /// <summary>发布时间（UTC）；取不到为 null。</summary>
         public DateTime? PublishedAt { get; set; }
 

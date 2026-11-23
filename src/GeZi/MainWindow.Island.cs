@@ -323,6 +323,23 @@ namespace GeZi
 
 
         /// <summary>
+        /// 统一的「需要登录」轻提示（用户 m18669/m18688：所有需登录的提示都改走灵动岛，
+        /// 不再弹模态框）。灵动岛一次性提示 2 秒，同时把用户带到登录页 ——
+        /// 切页是持续可见的，弥补轻提示会消失这一点，用户不会觉得「点了没反应」。
+        /// 可在任意线程调用（内部走 <see cref="RunOnUi"/>）。
+        /// 日志由各调用点自己记，避免重复。
+        /// </summary>
+        private void NoticeNeedLogin(string message, bool goToLogin = true)
+        {
+            RunOnUi(() =>
+            {
+                ShowIslandNotice(message);
+                if (goToLogin) { try { Tabs.SelectedIndex = 3; } catch { } }
+            });
+        }
+
+
+        /// <summary>
         /// 把灵动岛上的取链数字从当前显示值平滑推进到目标值。
         /// <para>
         /// 真实进度是一批 30 个跳一次（一个 HTTP 请求带 30 个 fid），

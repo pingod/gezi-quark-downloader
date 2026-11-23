@@ -28,7 +28,7 @@
     <Prefer32Bit>false</Prefer32Bit>
     <Product>鸽子下载</Product>
     <AssemblyTitle>鸽子下载</AssemblyTitle>
-    <Version>2.4.0</Version>
+    <Version>2.4.4</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <StartupObject>GeZi.App</StartupObject>
     <!-- 应用图标：exe 文件图标 + 任务栏/Alt-Tab 图标。

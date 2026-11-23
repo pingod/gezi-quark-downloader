@@ -294,6 +294,26 @@ namespace GeZi
         }
 
         /// <summary>
+        /// 本次任务全程的峰值速度（字节/秒，取 5 秒平滑速度的历史最大值）。
+        /// 「风控参谋」任务结束采集时用 —— 一条样本记录的是「这次跑到多快」，
+        /// 而不是结束那一帧的瞬时速度（收尾期速度必然趋近 0，没参考价值）。
+        /// </summary>
+        public double PeakBps { get; private set; }
+
+        /// <summary>用最新的平滑速度喂一次峰值维护（比当前峰值大才更新）。</summary>
+        public void TrackPeak(double displaySpeed)
+        {
+            if (displaySpeed > PeakBps) PeakBps = displaySpeed;
+        }
+
+        /// <summary>
+        /// 本次任务是否出现过停滞/风控信号（一旦置 true 就不回退）。
+        /// 由 <c>MainWindow.OnDiagnostics</c> 从 <c>DiagnosticsSnapshot.Stalled</c> 喂入，
+        /// 供「风控参谋」任务结束采集时判定这条样本是否触雷。
+        /// </summary>
+        public bool StalledOnce { get; set; }
+
+        /// <summary>
         /// 用户**已经按过暂停**（界面立刻显示「已暂停 / 0 B/s」），
         /// 但下载器内部还在收尾（worker 要跑完手上那一次读）。核心层在此期间仍会报 Downloading。
         /// </summary>

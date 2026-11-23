@@ -334,6 +334,8 @@ namespace GeZi
                 ConcurrentBox.SelectedIndex = concLoad - 1;
                 OutDirBox.Text = _settings.OutDir;
                 AutoCleanCheck.IsChecked = _settings.AutoClean;
+                // 严格校验（默认关 = 快速校验）
+                StrictVerifyCheck.IsChecked = _settings.StrictVerify;
                 // 2026-11-01（用户拍板方案 B）：设置页「分片/缓存根目录」输入框已整块删除，
                 // 这里不再回填任何控件。
                 // ⚠️ 不要顺手把 PartsRoot 也清空 —— 老配置里它可能指向一个真实存在的老分片目录，
@@ -803,6 +805,7 @@ namespace GeZi
                     OutDirBox.Text = _settings.OutDir;
                 }
                 _settings.AutoClean = AutoCleanCheck.IsChecked == true;
+                _settings.StrictVerify = StrictVerifyCheck.IsChecked == true;
                 // 2026-11-01（方案 B）：输入框已删除，这里不再取值、不再改写 PartsRoot，
                 // 也不再调 RegisterPartsDirHistory（没有入口能再改它，记历史已无意义）。
                 // 🚨 2026-11-07：落盘方式固定共写（用户明确「不要顺序写了」）。

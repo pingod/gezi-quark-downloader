@@ -627,11 +627,26 @@ namespace GeZi.DownloadEngine
             // 固态盘没有寻道代价，保持默认 64 / 16 MB 即可（省内存）。
             bool hdd = DiskMedia.DetectForPath(job.Dest) == DiskMediaKind.Hdd;
 
+            // 🚨 2026-11-14：给内存写缓冲**设上限**，超了就背压生产端（以前是永不背压）。
+            //
+            // 原实现 MaximumMemoryBufferBytes 保持 0 ⇒ ConcurrentPacketBuffer.BufferSize
+            // 取 long.MaxValue ⇒ StopAddingIfLimitationExceeded 永远不触发 ⇒
+            //   · 写盘跟不上（机械盘 6 MB/s）时队列无限增长，内存一路涨到几 GB；
+            //   · 用户看到的是「卡顿 / 内存暴涨」，严重时 OOM。
+            // 网络 24 MB/s 而机械盘只能写 6 MB/s 时，差额 18 MB/s 全堆在内存里 ——
+            // 100 秒就是 1.8 GB。这不是理论值，是用户实测「越下越卡」的直接来源。
+            //
+            // 设限后表现：队列满 → 生产端（worker 的 TryAdd）等写盘腾出空间 →
+            // 下载速度自动降到磁盘速度。这正是我们想要的（不卡、不 OOM、
+            // 且速度不会假高——进度与磁盘真实写入一致）。
+            long memBufferBytes = GeZi.Core.Support.DownloadSizing.MemoryBufferBytes(hdd);
+
             return new DownloadConfiguration
             {
                 ParallelDownload = true,
                 ChunkCount = eff,
                 ParallelCount = eff,
+                MaximumMemoryBufferBytes = memBufferBytes,
                 // 64 KB 读缓冲：实测 64 KB / 256 KB / 1 MB 三者速度无差别，取中间值减少小包。
                 BufferBlockSize = 64 * 1024,
                 // 必须显式设：bezzad 默认 1000ms，慢一点的连接会被判超时反复重试。
@@ -659,9 +674,20 @@ namespace GeZi.DownloadEngine
                 //   与 PreemptMinBytes（512KB，慢片抢占用）刻意分开：
                 //   收尾时剩下的大片要能切得比 512KB 更细，才能把空闲 worker 填满。
                 //   依据 refs/YunX 的 ElasticAllocator：尾部把块压到 remaining/workers，
-                //   下限 MIN_TAIL_BLOCK 取 64KB；这里保守取 256KB
-                //   （每片仍要一次 Range 请求，太碎会拖慢快连接）。
-                TailRefillMinBytes = 256L * 1024,
+                //   下限 MIN_TAIL_BLOCK 取 64KB。
+                //
+                // 🚨🚨 2026-11-14：**这行原来写 256KB，是一个把上游修复整个覆盖掉的 bug**。
+                //   DownloadConfiguration._tailRefillMinBytes 已在 2026-11-08（提交 9846055）
+                //   从 256KB 降到 64KB 并写明「这是修回归，不是调参」，
+                //   但本行是 2026-10-29 五层重构（提交 6f0299b）留下的老值，
+                //   一路把引擎默认值覆盖回 256KB ⇒ 那次修复线上从未生效。
+                //   后果链：2026-11-07 分片公式改造后常规片长降到 128KB，
+                //   而 TryRefillTail 的门槛 `maxRemain / 256KB < 2 → return false`，
+                //   128KB 的片算出来是 0 份 ⇒ 收尾期一刀都切不出来 ⇒
+                //   末段退化成「剩余片数 × 单连接速度」，界面卡在 99.x% 磨很久。
+                //   ⇒ 必须与 DownloadConfiguration 的默认值一致（64KB）。
+                //   64KB 也是 refs/YunX 的 MIN_TAIL_BLOCK 实测值。
+                TailRefillMinBytes = 64L * 1024,
                 // 慢连接看门狗：低于 16 KB/s 持续 10 秒就主动断开重连（换条新 TCP 连接）。
                 // 实测（8MB/8 线程，首连接 8 KB/s、其余 60 KB/s）：
                 //   关闭 → 126.6 秒；开启 → 22.5 秒，快 5.6 倍。
@@ -688,6 +714,31 @@ namespace GeZi.DownloadEngine
                 // 续传加载时与本次任务比对 —— 不一致说明同一路径换了另一个源文件，
                 // 必须整份作废重下（否则拼出「长度对、内容坏」的成品）。
                 // 空串 = 调用方没提供 → 不做这项校验，退回按 TotalBytes 判。
+                // 哈希元数据是否可信（决定收尾跑不跑全量哈希）。
+                //
+                // 🚨🚨 2026-11-14：目前**只有夸克**的 md5 与真实内容不符
+                //   （2026-10-24 全量逐字节比对坐实：本地与服务器一致，但都不等于
+                //   接口声称的 md5）。对它跑全量 SHA-256 的唯一结果是
+                //   「算出不符 → 抽样 → 判定元数据不可信 → 放行」，结论恒为可用，
+                //   代价是整个文件顺序读一遍：22GB × 托管 SHA-256（100~200 MB/s）
+                //   = 110~220 秒，用户看到「卡在 99%」。
+                //   所以夸克直接 TrustExpectedHash = false，改走
+                //   「分片覆盖校验 + 4 段抽样逐字节复核」，判得更严且不读全文件。
+                //
+                //   ⚠️ UC 曾被一并划进来，理由只是「和夸克同协议族」—— 复查发现那条
+                //   实测证据其实是夸克的，UC 从未做过同等比对，而 UC 日志里反而出现过
+                //   「内容校验：MD5 校验通过」。按 AGENTS.md 一·6 / 一·8 不许把推断
+                //   当事实，UC 已移出名单（恢复全量哈希，原行为）。
+                //
+                //   阿里 / 迅雷的哈希是准的，保持 true（原行为不变）。
+                //   PanKind 是 int（引擎不认识具体网盘），0 = Quark。
+                //   判据本身抽到 Core 的 DownloadSizing.TrustsExpectedHash，
+                //   这样自检能直接断言、运行期与自检永远不会漂移。
+                TrustExpectedHash = GeZi.Core.Support.DownloadSizing.TrustsExpectedHash(job.PanKind),
+                // 🚨 快速校验（设置页「严格校验」默认关）：
+                //   QuickVerify=true → 下载完成后只做「分片覆盖 + 长度」（毫秒），
+                //   跳过全量哈希与网络抽样；false → 恢复旧行为（夸克抽样、UC/阿里/迅雷全量哈希）。
+                QuickVerify = !job.StrictVerify,
                 SourceKey = job.SourceKey ?? "",
                 ExpectedMd5 = expectedMd5 ?? job.Md5,
                 ExpectedSha1 = expectedSha1 ?? job.Sha1,
@@ -937,10 +988,30 @@ namespace GeZi.DownloadEngine
             }
         }
 
+        /// <summary>
+        /// 判断一个 <see cref="IOException"/> 是不是「网络传输层断开」而不是「磁盘写坏了」。
+        /// <para>
+        /// 🚨 2026-11-14 修 issue #18：.NET Framework 的 ConnectStream 读响应体时抛的是
+        /// <c>IOException("无法从传输连接中读取数据: 连接已关闭。")</c> —— 本质是网络断开，
+        /// 却被原来的 <c>if (ex is IOException)</c> 一律说成「写盘失败」。用户会去查磁盘空间、
+        /// 换硬盘，白折腾。这里只认传输层特征，磁盘类错误（磁盘已满/被占用/无权限）不会命中。
+        /// </para>
+        /// </summary>
+        /// <summary>
+        /// 异常是不是「传输层断开」而不是磁盘问题。
+        /// <para>
+        /// 🚨 2026-11-14：判据已统一到 <see cref="GeZi.Core.Support.RetryPolicy.IsTransportIo"/>，
+        /// 自检可以直接断言，也避免这里与调度器各留一份慢慢漂移。
+        /// </para>
+        /// </summary>
+        private static bool IsTransportIoError(Exception ex)
+        {
+            return GeZi.Core.Support.RetryPolicy.IsTransportIo(ex);
+        }
+
         /// <summary>把异常翻译成用户看得懂的一句话（避免把英文堆栈丢到界面上）。</summary>
         private static string DescribeFailure(Exception ex)
-        {
-            var we = ex as System.Net.WebException;
+        {            var we = ex as System.Net.WebException;
             if (we != null)
             {
                 if (we.Response != null)
@@ -995,6 +1066,17 @@ namespace GeZi.DownloadEngine
 
             if (ex is IOException)
             {
+                // 🚨🚨 2026-11-14 修 issue #18：原来这里无条件写「写盘失败：」，但
+                // .NET Framework 的 ConnectStream 在读响应体时抛的也是 IOException：
+                //     "无法从传输连接中读取数据: 连接已关闭。"
+                // 那是**网络断开**，跟磁盘一点关系都没有。套上「写盘失败」前缀会让用户以为
+                // 硬盘出问题，去查磁盘空间、去换盘，白折腾（issue #18 就是这样）。
+                // 现在：只有真·磁盘错误才说「写盘失败」，传输层断开照实说网络问题。
+                if (IsTransportIoError(ex))
+                {
+                    return "下载中断：网络连接被服务端或中间设备断开（" + ex.Message
+                        + "）。已下载部分会保留，可直接重试续传。";
+                }
                 return "写盘失败：" + ex.Message;
             }
 

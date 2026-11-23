@@ -113,6 +113,24 @@ namespace GeZi.Providers.Xunlei
         public const string BatchDeletePath = "/drive/v1/files:batchDelete";
 
         /// <summary>
+        /// 列目录的过滤条件：**只要没进回收站的文件**。
+        /// <para>
+        /// 🚨🚨 2026-11-14 修「删除了文件但列表里还在，点下载又取不到直链」：
+        /// 迅雷的 <see cref="BatchDeletePath"/> 是**移入回收站**（不是物理删除），
+        /// 而 <c>GET /drive/v1/files</c> 默认**连回收站里的文件一起返回**。
+        /// ⇒ 删完之后重新拉目录，服务端又把那些已进回收站的文件发回来，
+        /// 界面看起来"没删掉"；但取直链查的是活跃文件，回收站里的取不到，
+        /// 于是点下载就报错。两个症状是同一个病因。
+        /// </para>
+        /// <para>
+        /// 对齐 refs/YunX <c>XunleiApi.kt:435</c>：
+        /// <c>filters={"trashed":{"eq":false}}</c>。
+        /// 由 <c>BuildUrl</c> 统一做 URL 编码，这里给的是**未编码的原始 JSON**。
+        /// </para>
+        /// </summary>
+        public const string NotTrashedFilter = "{\"trashed\":{\"eq\":false}}";
+
+        /// <summary>
         /// 转存用的临时文件夹名。
         /// <para>
         /// 🚨 2026-11-03 统一命名：原来四家网盘用了三套名字 ——

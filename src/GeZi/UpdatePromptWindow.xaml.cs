@@ -67,18 +67,53 @@ namespace GeZi
                 ? "（这个版本没有写更新说明，可打开 Release 页查看。）"
                 : _release.Body.Trim();
 
+            // 🚨 2026-11-15：Release 里没挂附件（或附件名没匹配上）时，
+            // 「直接下载」没有直链可用 ⇒ 隐藏该按钮，只留「前往下载」。
+            // 否则用户点了只会得到一句「打开失败」，比没有更糟。
+            bool hasAsset = !string.IsNullOrEmpty(_release.AssetUrl);
+            if (DownloadBtn != null)
+            {
+                DownloadBtn.Visibility = hasAsset ? Visibility.Visible : Visibility.Collapsed;
+                DownloadBtn.ToolTip = hasAsset
+                    ? "直接下载安装包（zip），下载完解压覆盖旧目录即可"
+                    : "";
+            }
+
             Loaded += (s, e) =>
             {
                 DialogChrome.ApplyRoundedCorners(this);
             };
         }
 
-        /// <summary>「前往下载」：打开 Release 详情页（浏览器下载安装包）。</summary>
+        /// <summary>
+        /// 「直接下载」：打开安装包直链（GitHub 附件 URL）。
+        /// 没有直链就退回复 Release 页（而不是丢给用户一句失败）。
+        /// </summary>
         private void OnDownloadClick(object sender, RoutedEventArgs e)
         {
-            var url = _release.HtmlUrl;
+            string url = _release.AssetUrl;
+            if (string.IsNullOrEmpty(url))
+            {
+                OnOpenPageClick(sender, e);
+                return;
+            }
+            OpenUrl(url);
+            try { Close(); } catch { }
+        }
+
+        /// <summary>「前往下载」：打开 Release 详情页（浏览器下载安装包）。</summary>
+        private void OnOpenPageClick(object sender, RoutedEventArgs e)
+        {
+            string url = _release.HtmlUrl;
             if (string.IsNullOrEmpty(url))
                 url = UpdateService.ReleasesPageUrl;
+            OpenUrl(url);
+            try { Close(); } catch { }
+        }
+
+        /// <summary>用默认浏览器打开一个地址；失败就把地址摆出来让用户手动复制。</summary>
+        private void OpenUrl(string url)
+        {
             try
             {
                 if (!ShellLaunch.OpenUrl(url))
@@ -90,7 +125,6 @@ namespace GeZi
                 // 直接把网址摆出来让用户手动复制，不再贴异常原文。
                 AppDialog.Show(this, "打开浏览器失败，请手动访问：\n\n" + url, "更新");
             }
-            try { Close(); } catch { }
         }
 
         /// <summary>

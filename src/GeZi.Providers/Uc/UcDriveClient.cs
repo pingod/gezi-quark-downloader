@@ -456,6 +456,67 @@ namespace GeZi.Providers.Uc
 
 
         /// <summary>
+        /// 轻量探测分享是否还有效：**只换 stoken**，不列目录。
+        /// <para>
+        /// 与夸克同协议（同一套 ucpro 后端），所以语义完全一致：
+        /// 换到 stoken = 还有效；服务端说链接无效/提取码错 = 确定失效；
+        /// 网络异常 = 判断不了（不能当失效）。
+        /// </para>
+        /// </summary>
+        public async Task<ShareProbeResult> ProbeShareAsync(
+            PanShareRef shareRef, CancellationToken cancel = default)
+        {
+            if (shareRef == null || string.IsNullOrEmpty(shareRef.ShareId))
+                return new ShareProbeResult { Status = ShareProbeStatus.Unknown, Reason = "分享 ID 为空" };
+
+            try
+            {
+                string stoken = await GetStokenAsync(shareRef.ShareId, shareRef.Passcode ?? "", cancel)
+                    .ConfigureAwait(false);
+                if (string.IsNullOrEmpty(stoken))
+                {
+                    return new ShareProbeResult
+                    {
+                        Status = ShareProbeStatus.Invalid,
+                        Reason = "链接已失效，或提取码不对",
+                    };
+                }
+                return new ShareProbeResult { Status = ShareProbeStatus.Alive };
+            }
+            catch (QuarkApiException ex)
+            {
+                return new ShareProbeResult
+                {
+                    Status = ShareProbeStatus.Invalid,
+                    Reason = DescribeProbeError(ex),
+                };
+            }
+            catch (Exception)
+            {
+                return new ShareProbeResult
+                {
+                    Status = ShareProbeStatus.Unknown,
+                    Reason = "网络没通，暂时判断不了",
+                };
+            }
+        }
+
+        /// <summary>把 UC 接口的报错翻成一句人话（与夸克同口径）。</summary>
+        private static string DescribeProbeError(QuarkApiException ex)
+        {
+            string msg = ex != null && ex.Message != null ? ex.Message : "";
+            if (msg.IndexOf("passcode", StringComparison.OrdinalIgnoreCase) >= 0
+                || msg.IndexOf("提取码", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("密码", StringComparison.Ordinal) >= 0)
+                return "提取码不对";
+            if (msg.IndexOf("失效", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("不存在", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("invalid", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "链接已失效";
+            return "链接已失效或提取码不对";
+        }
+
+        /// <summary>
         /// 取账号昵称 + 头像。同一个 account/info 请求里把 <c>avatarUri</c> 也带出来，
         /// 免得为了头像再发一次网络请求。
         /// 任何一步失败都返回空串（拿不到不等于登录失败）。

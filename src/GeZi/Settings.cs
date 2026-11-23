@@ -112,6 +112,16 @@ namespace GeZi
         public bool AutoClean { get; set; } = true;
 
         /// <summary>
+        /// 严格校验（下载完成后全量哈希比对）。默认 <c>false</c> = 快速校验：
+        /// 四家网盘统一只做「分片覆盖 + 长度校验」（毫秒级），不跑全量哈希、不跑网络抽样。
+        /// <para>
+        /// 置 <c>true</c> 恢复旧行为：UC/阿里/迅雷跑全量 SHA-256，夸克跑「分片覆盖 + 4 段抽样」。
+        /// 保留这个开关是因为「长度对内容错」的极端场景只有全量哈希/抽样能抓（用户已知情其代价）。
+        /// </para>
+        /// </summary>
+        public bool StrictVerify { get; set; } = false;
+
+        /// <summary>
         /// 【已废弃，仅保留字段兼容旧配置】「未完成」入口静音标志（2026-11-03 引入，2026-11-04 废弃）。
         /// <para>
         /// 🚨🚨 2026-11-04 用户第二次报同一个问题：
@@ -448,7 +458,7 @@ namespace GeZi
         public long UpdateLastCheckTicks { get; set; }
 
         /// <summary>
-        /// 上次查到的最新版本号（"2.5.0"）。空/null = 目前没有待提示的更新。
+        /// 上次查到的最新版本号（"2.4.4"）。空/null = 目前没有待提示的更新。
         /// ⚠️ 存它是为了**红点能跨会话保持**：检查只在启动时做，而「关于」窗口是后来才打开的，
         ///    打开时不能再去查一次（会卡一下 UI），只能读这里。
         /// </summary>
@@ -464,6 +474,15 @@ namespace GeZi
         /// 失败后把冷却期持久化，重启后仍在冷却期内就直接跳过；续期成功清零。
         /// </summary>
         public long AliyunRenewFailedTicks { get; set; }
+
+        /// <summary>
+        /// 🚨 2026-11-14：上次「迅雷自动续期失败」的时刻（UTC Ticks），0 = 从未失败。
+        /// 与 <see cref="AliyunRenewFailedTicks"/> 同构：迅雷的 refresh_token 是**单次有效、
+        /// 用一次就轮换**的（无论成败服务端都可能作废旧值），失败后必须冷却，否则每次
+        /// 四卡实测失败都白耗一次 refresh_token，把"还能救"的账号硬耗成"必须重新登录"。
+        /// 失败后把冷却期持久化，重启后仍在冷却期内就直接跳过；续期成功清零。
+        /// </summary>
+        public long XunleiRenewFailedTicks { get; set; }
     }
 
     /// <summary>主窗口「关闭」按钮的行为。</summary>

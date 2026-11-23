@@ -966,6 +966,8 @@ namespace GeZi
                 {
                     hit.ActiveConnections = snap.ActiveConnections;
                     hit.WorkerCount = snap.WorkerCount;
+                    // 风控参谋：任一快照判「停滞」就永久记一次（供任务结束采集判定触雷）。
+                    if (snap.Stalled) hit.StalledOnce = true;
                 }
             }
             catch { }

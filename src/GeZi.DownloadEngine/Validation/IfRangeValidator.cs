@@ -15,6 +15,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using System.Threading;
@@ -131,68 +132,106 @@ public sealed class IfRangeValidator : IContentValidator
 
     private static VerifyOutcome VerifyCore(string path, HashExpectation expect, CancellationToken cancel)
     {
-        string algorithm;
-        string expected;
+        // 🚨🚨 2026-11-14 改：**多算法全试，不再「取第一个非空的就算」**。
+        //
+        // 原来的写法是互斥 if-else：给了 Sha256 就只算 SHA-256，不符直接判 Warn，
+        // 后面明明还有 Sha1 / Md5 两个字段却从不尝试。
+        //
+        // 后果（用户实测反复撞上）：夸克同时返回 md5 / sha1 / sha256 三个字段
+        // （见 QuarkClient.cs 里的 file_md5 / file_sha1 / file_sha256），
+        // 而它的 md5 **经常和真实内容不符**（2026-10-24 全量比对坐实：本地与服务器逐字节一致，
+        // 但都不等于接口给的 md5）。于是只用 md5 判断就永远「不一致」。
+        //
+        // 现在：按可信度从高到低逐个试，**任一匹配就算通过**。
+        // 代价控制：只有前一个不符才会算下一个；SHA-256 本身不可能错，
+        // 所以「接口给了 sha256」的正常情况仍然只算一遍。
+        var attempts = new List<KeyValuePair<string, string>>(3);
+        if (!string.IsNullOrEmpty(expect.Sha256)) attempts.Add(new KeyValuePair<string, string>("SHA-256", expect.Sha256));
+        if (!string.IsNullOrEmpty(expect.Sha1)) attempts.Add(new KeyValuePair<string, string>("SHA-1", expect.Sha1));
+        if (!string.IsNullOrEmpty(expect.Md5)) attempts.Add(new KeyValuePair<string, string>("MD5", expect.Md5));
 
-        if (!string.IsNullOrEmpty(expect.Sha256))
+        if (attempts.Count == 0)
         {
-            algorithm = "SHA-256";
-            expected = expect.Sha256;
-        }
-        else if (!string.IsNullOrEmpty(expect.Sha1))
-        {
-            algorithm = "SHA-1";
-            expected = expect.Sha1;
-        }
-        else
-        {
-            algorithm = "MD5";
-            expected = expect.Md5;
+            return VerifyOutcome.Skip("未校验（接口未提供哈希）");
         }
 
-        string actual;
-        try
+        var mismatches = new List<string>(attempts.Count);
+
+        for (int i = 0; i < attempts.Count; i++)
         {
-            using (var hash = CreateHash(algorithm))
-            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, HashBufferSize, FileOptions.SequentialScan))
+            cancel.ThrowIfCancellationRequested();
+            string algorithm = attempts[i].Key;
+            string expected = attempts[i].Value;
+
+            string actual;
+            try
             {
-                byte[] digest = hash.ComputeHash(fs);
-                actual = ToHex(digest);
+                using (var hash = CreateHash(algorithm))
+                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, HashBufferSize, FileOptions.SequentialScan))
+                {
+                    byte[] digest = hash.ComputeHash(fs);
+                    actual = ToHex(digest);
+                }
             }
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return VerifyOutcome.Fail(algorithm, algorithm + " 计算失败：" + ex.Message);
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // 单个算法算不出来（比如文件被独占）不值得判死，记下来试下一个
+                mismatches.Add(algorithm + " 计算失败：" + ex.Message);
+                continue;
+            }
+
+            cancel.ThrowIfCancellationRequested();
+
+            if (string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+            {
+                // 任一算法匹配即通过。首选算法第一次就过 → Message 留空（走默认文案）；
+                // 靠后面的算法才匹配 → 把「哪个算法救回来的」写进 Message，便于排查。
+                if (i == 0 && mismatches.Count == 0)
+                {
+                    return VerifyOutcome.Pass(algorithm);
+                }
+                return VerifyOutcome.Pass(algorithm + "（多算法复核，其余算法不符）");
+            }
+
+            mismatches.Add(algorithm + " 不一致（期望 " + expected + "，实际 " + actual + "）");
         }
 
-        cancel.ThrowIfCancellationRequested();
-
-        if (string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
-        {
-            return VerifyOutcome.Pass(algorithm);
-        }
-
-        // 不一致**不直接判失败**：网盘接口给的哈希可能只是上传时的元数据，
+        // 全部算法都不符**不直接判失败**：网盘接口给的哈希可能只是上传时的元数据，
         // 与实际下发内容不符（实测夸克就是这样）。标记 HashMismatch，
         // 交给上层抽样逐字节复核后再定性。
-        return VerifyOutcome.Warn(
-            algorithm + " 不一致（期望 " + expected + "，实际 " + actual + "）");
+        return VerifyOutcome.Warn(string.Join("；", mismatches));
     }
 
+    /// <summary>
+    /// 创建哈希实例。
+    /// <para>
+    /// 🚨 2026-11-14：**必须用 CryptoServiceProvider 系列，不能用 <c>SHA256.Create()</c>**。
+    /// </para>
+    /// <para>
+    /// <c>SHA256.Create()</c> 在 .NET Framework 上返回的是 <c>SHA256Managed</c> —— 纯托管实现，
+    /// 单核只有约 100~200 MB/s。22GB 大文件收尾校验要白跑 110~220 秒，用户看起来像「卡在 99%」。
+    /// </para>
+    /// <para>
+    /// <c>SHA256CryptoServiceProvider</c> 走系统 CNG/CAPI，支持 CPU 的 SHA-NI 指令集，
+    /// 实测比托管实现快 3~5 倍。它要求「FIPS 兼容」，而我们这里只做本地文件摘要，
+    /// 不涉及密钥派生，完全满足。算法结果与托管实现**逐位一致**（都是标准 SHA-256），
+    /// 所以不会改变任何校验判定。
+    /// </para>
+    /// </summary>
     private static HashAlgorithm CreateHash(string algorithm)
     {
         switch (algorithm)
         {
             case "SHA-256":
-                return SHA256.Create();
+                return new SHA256CryptoServiceProvider();
             case "SHA-1":
-                return SHA1.Create();
+                return new SHA1CryptoServiceProvider();
             default:
-                return MD5.Create();
+                return new MD5CryptoServiceProvider();
         }
     }
 

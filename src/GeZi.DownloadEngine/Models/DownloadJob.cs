@@ -179,6 +179,14 @@ namespace GeZi.DownloadEngine
         public int PanKind { get; set; }
 
         /// <summary>
+        /// 严格校验（下载完成后全量哈希比对）。默认 <c>false</c> = 快速校验
+        /// （四家统一只做「分片覆盖 + 长度校验」，毫秒级，不跑全量哈希、不跑网络抽样）。
+        /// <para>由 UI 层从设置页 <c>Settings.StrictVerify</c> 注入。引擎不认识具体网盘，
+        /// 只把「要不要严格校验」这个布尔透传给 <see cref="FusionDownloader.BuildOptions"/>。</para>
+        /// </summary>
+        public bool StrictVerify { get; set; }
+
+        /// <summary>
         /// 下载数据面的额外请求头（Sec-Ch-Ua / Sec-Fetch-* / Accept-Language 等）。
         /// <para>由 UI 层按 <see cref="PanKind"/> 从 PanClientProfile 生成；
         /// 引擎不认识具体网盘，只负责透传。null = 不追加。</para>
@@ -272,6 +280,17 @@ namespace GeZi.DownloadEngine
         /// 拿夸克客户端去请求 UC/阿里/迅雷必然失败，所以这个字段必须随任务持久化。
         /// </summary>
         public int PanKind { get; set; }
+
+        /// <summary>
+        /// 这条任务属于**哪个账号**的指纹（见 <c>AccountStore.StableCookieFingerprint</c>）。
+        /// <para>
+        /// 🚨 2026-11-14：同一家网盘可以有多个账号，而 <see cref="PanKind"/> 只区分网盘。
+        /// 续传原本用"当前这一家的当前账号"去取链 —— 换成同网盘的另一个账号续传旧任务时，
+        /// 会拿新账号的凭证去取旧账号的文件（取不到，或者取到别的账号里的同名文件）。
+        /// 空串 = 老任务/未知，此时不校验（保持旧行为，不能把老任务判死）。
+        /// </para>
+        /// </summary>
+        public string AccountTag { get; set; }
         /// <summary>相对目录（含尾部分隔符时也算合法），用于重建目标路径。</summary>
         public string RelDir { get; set; }
         /// <summary>分享进入目录 fid（带 fid 的分享链接才有意义，普通分享是 "0"）。

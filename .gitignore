@@ -1,4 +1,4 @@
-﻿# GeZi（鸽子下载）— Git 忽略规则
+# GeZi（鸽子下载）— Git 忽略规则
 
 # ---------- 用户数据（本地运行产生，绝不入库） ----------
 GeZi.config.xml
@@ -97,3 +97,8 @@ _smoke/obj/
 .run/test-cfg/
 .run/test-dl/
 .run/Downloads/
+
+# 本地临时构建/补丁/旧文件备份目录（不进版本库）
+.tmpbuild/
+_d2.txt
+_d3.txt

@@ -278,4 +278,37 @@
     -->
     <Geometry x:Key="IconHelpCircle">M12,2 A10,10 0 1 1 12,22 A10,10 0 1 1 12,2 M9.09,9 A3,3 0 0 1 14.92,10 C14.92,12 11.92,13 11.92,13 M12,17 L12.01,17</Geometry>
 
+    <!--
+        收藏（五角星，空心描边）：工具栏「收藏」按钮 + 收藏浮层列表图标用。
+        取自 Lucide 图标库 star（ISC 许可，可自由嵌入）：
+          https://lucide.dev/icons/star
+        24×24 viewBox、stroke-width 2、圆头圆角 —— 与 IconTrash / IconHelpCircle 同源同规格。
+
+        ⚠️ **描边几何，只能上 Stroke，不能上 Fill**（文件头统一约定；
+           只有 IconRefresh 是实心几何、只能上 Fill）。
+        用户要求「图标要从图标库里拿、不要自己画」—— 这条就是从 Lucide 官方库抄进
+        图标字典的常量，与 Icons.xaml 里其它 Lucide 图标做法完全一致，
+        不引图标字体、不带 DLL，所以 package.py 的 KEEP_FILES 不用改。
+    -->
+    <Geometry x:Key="IconStar">M11.525,2.295 A0.53,0.53 0 0 1 12.475,2.295 L14.785,6.974 A2.12,2.12 0 0 0 16.38,8.134 L21.546,8.89 A0.53,0.53 0 0 1 21.84,9.794 L18.104,13.432 A2.12,2.12 0 0 0 17.493,15.31 L18.375,20.45 A0.53,0.53 0 0 1 17.604,21.01 L12.986,18.582 A2.12,2.12 0 0 0 11.013,18.582 L6.396,21.01 A0.53,0.53 0 0 1 5.626,20.45 L6.507,15.311 A2.12,2.12 0 0 0 5.896,13.432 L2.16,9.795 A0.53,0.53 0 0 1 2.454,8.89 L7.619,8.135 A2.12,2.12 0 0 0 9.216,6.975 Z</Geometry>
+
+    <!--
+        文本编辑四件套（剪切 / 复制 / 粘贴 / 全选）：链接输入框右键菜单用。
+        ⚠️ 用户 2026-11-15 指出「右键选项只有收藏有图标，看着不齐」——
+           菜单的隐式样式是**固定 22px 图标列**，没图标的项左边就空一块。
+        所以要么给图标，要么整条菜单都别有图标；这里选了给图标（更直观）。
+
+        取自 Lucide 图标库（ISC 许可，可自由嵌入）：
+          · scissors         —— https://lucide.dev/icons/scissors
+          · copy             —— https://lucide.dev/icons/copy
+          · clipboard        —— https://lucide.dev/icons/clipboard
+          · square-check-big —— https://lucide.dev/icons/square-check-big
+        24×24 viewBox、stroke-width 2、圆头圆角 —— 与本文件其它图标同规格（只用 Stroke）。
+        SVG 的相对指令已换算成绝对坐标，便于核对。
+    -->
+    <Geometry x:Key="IconScissors">M6,3 A3,3 0 1 1 6,9 A3,3 0 1 1 6,3 M8.12,8.12 L12,12 M20,4 L8.12,15.88 M6,15 A3,3 0 1 1 6,21 A3,3 0 1 1 6,15 M14.8,14.8 L20,20</Geometry>
+    <Geometry x:Key="IconCopy">M10,8 H20 A2,2 0 0 1 22,10 V20 A2,2 0 0 1 20,22 H10 A2,2 0 0 1 8,20 V10 A2,2 0 0 1 10,8 Z M4,16 A2,2 0 0 1 2,14 V4 A2,2 0 0 1 4,2 H14 A2,2 0 0 1 16,4</Geometry>
+    <Geometry x:Key="IconClipboard">M9,2 H15 A1,1 0 0 1 16,3 V4 A1,1 0 0 1 15,5 H9 A1,1 0 0 1 8,4 V3 A1,1 0 0 1 9,2 Z M16,4 H18 A2,2 0 0 1 20,6 V20 A2,2 0 0 1 18,22 H6 A2,2 0 0 1 4,20 V6 A2,2 0 0 1 6,4 H8</Geometry>
+    <Geometry x:Key="IconSelectAll">M9,11 L12,14 L22,4 M21,12 V19 A2,2 0 0 1 19,21 H5 A2,2 0 0 1 3,19 V5 A2,2 0 0 1 5,3 H16</Geometry>
+
 </ResourceDictionary>

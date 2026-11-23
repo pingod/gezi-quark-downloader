@@ -8,7 +8,7 @@
     <RootNamespace>GeZi.Providers</RootNamespace>
     <Product>鸽子下载</Product>
     <AssemblyTitle>鸽子下载</AssemblyTitle>
-    <Version>2.4.0</Version>
+    <Version>2.4.4</Version>
     <!-- 与主程序一致：统一 x64（混用位数会 0x8007000B）。 -->
     <PlatformTarget>x64</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>

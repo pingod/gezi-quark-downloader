@@ -69,9 +69,21 @@ namespace GeZi.Providers.Xunlei
         /// 网页签名是一层层混淆函数，纯算法复现不划算，所以交给 WebView2
         /// 让网页自己生成（refs/YunX 的做法）。
         /// </para>
-        /// <para>返回 <c>(captcha, deviceId)</c>；<c>deviceId</c> 非空时替换当前设备标识。</para>
+        /// <para>
+        /// 入参 <c>clientId</c>：当前 pan_token 声明的 client_id（token 的 aud），
+        /// 取码器要按它去读网页 localStorage 里的 <c>captcha_&lt;clientId&gt;</c>。
+        /// 写死默认 client_id 会在 aud 不是它的时候读不到对应体系的 captcha。
+        /// </para>
+        /// <para>
+        /// 返回 <c>(captcha, deviceId, altDeviceId)</c>：
+        /// captcha 非空时替换当前验证码；
+        /// deviceId 非空时替换当前设备标识；
+        /// altDeviceId 是备用设备号 —— 网页把设备号同时写在 localStorage 和 Cookie 里，
+        /// 两份不是同一个值，服务端到底认哪一份取决于 captcha 是用哪份签的，
+        /// 所以第一次失败后要能换另一份再试。
+        /// </para>
         /// </summary>
-        public Func<Task<(string captcha, string deviceId)>> CaptchaRefresher;
+        public Func<string, Task<(string captcha, string deviceId, string altDeviceId)>> CaptchaRefresher;
 
         private readonly string _panToken;
         private string _captchaToken;
@@ -147,10 +159,11 @@ namespace GeZi.Providers.Xunlei
             _apiBase = string.IsNullOrEmpty(apiBase) ? XunleiConstants.ApiBase : apiBase.TrimEnd('/');
             _authBase = string.IsNullOrEmpty(authBase) ? XunleiConstants.AuthBase : authBase.TrimEnd('/');
             // 实测必需：不带 device_id 服务端直接报 "device_id is empty"。
-            // 用稳定随机值（同一进程内复用），避免每次请求换设备触发风控。
-            _deviceId = string.IsNullOrEmpty(deviceId)
-                ? Guid.NewGuid().ToString("N")
-                : deviceId;
+            // 🚨 2026-11-15 修：以前这里用随机 GUID 兜底 —— 那是台「不存在」的设备，
+            // 服务端必然判 device not match（实测 captcha_invalid / device not match）。
+            // 现在留空，等取码器把「签发 captcha 的那台设备」连同 captcha 一起带回来，
+            // 两者同源才能过（实测：新设备号 + 过期 captcha = 400，旧设备号 + 新鲜 captcha 也 = 400）。
+            _deviceId = deviceId ?? "";
 
             _handler = new HttpClientHandler
             {
@@ -353,6 +366,115 @@ namespace GeZi.Providers.Xunlei
             return merged;
         }
 
+
+        /// <summary>
+        /// 轻量探测分享是否还有效：**只打一次分享根目录（limit=1）**，不翻页、不取文件列表。
+        /// <para>
+        /// 迅雷的分享根目录接口（<c>GET /drive/v1/share</c>）会在 <c>share_status</c> 里
+        /// 明确给出分享状态，这就是我们要的判据：
+        /// <list type="bullet">
+        /// <item><c>PASS_CODE_ERROR</c> → 提取码错了 ⇒ <b>确定失效</b>；</item>
+        /// <item><c>PASS_CODE_EMPTY</c> / <c>PASS_CODE_NEED</c> → 需要提取码但我们没给
+        ///       ⇒ <b>判断不了</b>（不能算失效）；</item>
+        /// <item>正常返回 ⇒ <b>还有效</b>。</item>
+        /// </list>
+        /// 网络异常 ⇒ 判断不了（<b>绝不能</b>当失效）。
+        /// </para>
+        /// </summary>
+        public async Task<ShareProbeResult> ProbeShareAsync(
+            PanShareRef shareRef, CancellationToken cancel = default)
+        {
+            if (shareRef == null || string.IsNullOrEmpty(shareRef.ShareId))
+                return new ShareProbeResult { Status = ShareProbeStatus.Unknown, Reason = "分享 ID 为空" };
+
+            try
+            {
+                var query = new Dictionary<string, string>
+                {
+                    { "share_id", shareRef.ShareId },
+                    { "pass_code", shareRef.Passcode ?? "" },
+                    { "limit", "1" },
+                    { "page_token", "" },
+                    { XunleiConstants.DeviceIdParam, _deviceId },
+                    { XunleiConstants.ClientIdParam, XunleiConstants.ClientId },
+                };
+
+                object res = await GetJsonAsync(_apiBase + XunleiConstants.ShareRootPath, query, cancel)
+                    .ConfigureAwait(false);
+
+                string status = PanJson.AsString(PanJson.Get(res, "share_status")) ?? "";
+                if (status == "PASS_CODE_ERROR")
+                {
+                    return new ShareProbeResult
+                    {
+                        Status = ShareProbeStatus.Invalid,
+                        Reason = "提取码不对",
+                    };
+                }
+                if (status == "PASS_CODE_EMPTY" || status == "PASS_CODE_NEED")
+                {
+                    // 需要提取码 —— 现在还判断不了，不能说它失效。
+                    return new ShareProbeResult
+                    {
+                        Status = ShareProbeStatus.Unknown,
+                        Reason = "需要提取码才能判断",
+                    };
+                }
+
+                // 服务端明确给了错误描述（分享被取消 / 不存在）⇒ 确定失效。
+                string err = PanJson.AsString(PanJson.Get(res, "error_description"))
+                             ?? PanJson.AsString(PanJson.Get(res, "message"))
+                             ?? PanJson.AsString(PanJson.Get(res, "error")) ?? "";
+                if (!string.IsNullOrEmpty(err)
+                    && PanJson.AsArray(PanJson.Get(res, "files")) == null
+                    && PanJson.AsArray(PanJson.Get(res, "list")) == null)
+                {
+                    return new ShareProbeResult
+                    {
+                        Status = ShareProbeStatus.Invalid,
+                        Reason = "链接已失效",
+                    };
+                }
+
+                return new ShareProbeResult { Status = ShareProbeStatus.Alive };
+            }
+            catch (QuarkApiException ex)
+            {
+                string msg = ex != null && ex.Message != null ? ex.Message : "";
+                if (msg.IndexOf("提取码", StringComparison.Ordinal) >= 0
+                    || msg.IndexOf("pass_code", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return new ShareProbeResult
+                    {
+                        Status = ShareProbeStatus.Invalid,
+                        Reason = "提取码不对",
+                    };
+                }
+                if (msg.IndexOf("失效", StringComparison.Ordinal) >= 0
+                    || msg.IndexOf("不存在", StringComparison.Ordinal) >= 0
+                    || msg.IndexOf("取消", StringComparison.Ordinal) >= 0)
+                {
+                    return new ShareProbeResult
+                    {
+                        Status = ShareProbeStatus.Invalid,
+                        Reason = "链接已失效",
+                    };
+                }
+                return new ShareProbeResult
+                {
+                    Status = ShareProbeStatus.Unknown,
+                    Reason = "网络没通，暂时判断不了",
+                };
+            }
+            catch (Exception)
+            {
+                return new ShareProbeResult
+                {
+                    Status = ShareProbeStatus.Unknown,
+                    Reason = "网络没通，暂时判断不了",
+                };
+            }
+        }
 
         /// <summary>
         /// 只打一次分享根目录，把 <c>pass_code_token</c> 取回来缓存。
@@ -886,6 +1008,7 @@ namespace GeZi.Providers.Xunlei
 
             var result = new List<QuarkFileEntry>();
             long offset = 0;
+            string pageToken = "";
             // 上限 200 页，防止服务端异常时死循环。
             for (int page = 0; page < 200; page++)
             {
@@ -894,8 +1017,17 @@ namespace GeZi.Providers.Xunlei
                 query["parent_id"] = (string.IsNullOrEmpty(parentId) || parentId == "0")
                     ? "" : parentId;
                 query["limit"] = XunleiConstants.PageSize.ToString();
-                query["offset"] = offset.ToString();
                 query["with_audit"] = "true";
+                // 🚨🚨 必须带：不带的话服务端会把**回收站里的文件**也返回，
+                //   于是"删除了还在列表里、点下载又取不到直链"（2026-11-14 修）。
+                query["filters"] = XunleiConstants.NotTrashedFilter;
+
+                // 翻页策略：服务端给了游标就用游标（更稳，目录内容变动时不会漏项/重复），
+                // 没给就退回原来的 offset 累加 —— 两种服务端行为都能正常工作。
+                if (!string.IsNullOrEmpty(pageToken))
+                    query["page_token"] = pageToken;
+                else
+                    query["offset"] = offset.ToString();
 
                 var res = await GetJsonAsync(_apiBase + "/drive/v1/files",
                     query, cancel).ConfigureAwait(false);
@@ -928,8 +1060,15 @@ namespace GeZi.Providers.Xunlei
                     });
                 }
 
+                string next = PanJson.AsString(PanJson.Get(res, "next_page_token")) ?? "";
+                if (!string.IsNullOrEmpty(next))
+                {
+                    pageToken = next;       // 有游标 → 下一轮按游标取
+                    continue;
+                }
                 if (files.Length < XunleiConstants.PageSize)
-                    break;
+                    break;                  // 没有游标且不足一页 → 末页
+                pageToken = "";
                 offset += files.Length;
             }
             return result;
@@ -991,9 +1130,12 @@ namespace GeZi.Providers.Xunlei
 
                 return new PanSpaceInfo { Used = used, Total = total };
             }
-            catch
+            catch (Exception ex)
             {
-                // 容量拿不到不该让账号卡片变成错误页
+                // 容量拿不到不该让账号卡片变成错误页 —— 返回 0 让界面显示"未知"，
+                // 但把原因记进 _lastError（对齐阿里 GetSpaceAsync 的做法），
+                // 用户点「验证登录态」时能看到线索，而不是一脸懵。
+                _lastError = "容量获取失败：" + (ex.Message ?? "");
                 return new PanSpaceInfo();
             }
         }
@@ -1080,6 +1222,28 @@ namespace GeZi.Providers.Xunlei
         private async Task<object> SendWithCaptchaAsync(string url, Dictionary<string, string> query,
             HttpMethod method, string jsonBody, CancellationToken cancel)
         {
+            // 🚨 2026-11-15 修：query 里的 device_id 是**构造时拷进去的字符串副本**，
+            // 换掉 _deviceId 之后光重建 URL 并不会更新它 ⇒ 服务端同时看到
+            // header 里新设备号、query 里旧设备号 ⇒ 判 device not match。
+            // 所以每次换设备号都要把 query 里的那份一起改掉。
+            SyncDeviceIdInQuery(query, _deviceId);
+
+            // 设备号为空 ⇒ 第一发就会撞 "device_id is empty"（那不是 captcha_required，
+            // 进不了下面的换盾流程）⇒ 先取一次 captcha，把设备号一起带回来。
+            if (string.IsNullOrEmpty(_deviceId) && CaptchaRefresher != null)
+            {
+                try
+                {
+                    var got0 = await CaptchaRefresher(ResolveClientId()).ConfigureAwait(false);
+                    if (!string.IsNullOrEmpty(got0.deviceId))
+                        _deviceId = got0.deviceId;
+                    if (!string.IsNullOrEmpty(got0.captcha))
+                        _captchaToken = got0.captcha;
+                }
+                catch { }
+                SyncDeviceIdInQuery(query, _deviceId);
+            }
+
             string full = BuildUrl(url, query);
 
             SendOutcome first = await SendOnceAsync(full, method, jsonBody, cancel).ConfigureAwait(false);
@@ -1091,6 +1255,7 @@ namespace GeZi.Providers.Xunlei
             // 否则服务端判 "device not match"。
             string action = method.Method + ":" + UrlPathOf(url);
             string fresh = null;
+            string altDeviceId = null;
 
             // 🚨 captcha 盾按 client_id 分体系：网页 token 只认网页 captcha，
             // App（手机号账号登录）token 只认 App captcha。所以先走与 token 同体系的那条，
@@ -1104,15 +1269,20 @@ namespace GeZi.Providers.Xunlei
             {
                 try
                 {
-                    var got = await CaptchaRefresher().ConfigureAwait(false);
+                    // 必须传 token 自己声明的 client_id（aud）：网页 localStorage 里的键名
+                    // 是 captcha_<clientId>，写死默认值在 aud 不是它的时候读不到对应的 captcha。
+                    var got = await CaptchaRefresher(ResolveClientId()).ConfigureAwait(false);
                     if (got.captcha != null && got.captcha.Length > 0)
                     {
                         fresh = got.captcha;
                         if (!string.IsNullOrEmpty(got.deviceId))
                         {
                             _deviceId = got.deviceId;
+                            // query 里那份是副本，必须一起换，否则 header 与 query 打架。
+                            SyncDeviceIdInQuery(query, _deviceId);
                             full = BuildUrl(url, query);
                         }
+                        altDeviceId = string.IsNullOrEmpty(got.altDeviceId) ? null : got.altDeviceId;
                     }
                 }
                 catch { }
@@ -1135,6 +1305,20 @@ namespace GeZi.Providers.Xunlei
             SendOutcome second = await SendOnceAsync(full, method, jsonBody, cancel).ConfigureAwait(false);
             if (!second.NeedsCaptcha)
                 return second.Payload;
+
+            // 🚨 网页把设备号同时写在 localStorage 和 Cookie 里，两份不是同一个值。
+            // 服务端判 "device not match" 时认的是「签这个 captcha 时用的那份」，
+            // 所以第一次失败就换另一份设备号再试一次（refs/YunX 用的是 Cookie 那份）。
+            if (!string.IsNullOrEmpty(altDeviceId) && altDeviceId != _deviceId)
+            {
+                _deviceId = altDeviceId;
+                SyncDeviceIdInQuery(query, _deviceId);
+                full = BuildUrl(url, query);
+                SendOutcome third = await SendOnceAsync(full, method, jsonBody, cancel).ConfigureAwait(false);
+                if (!third.NeedsCaptcha)
+                    return third.Payload;
+                second = third;
+            }
 
             throw new QuarkApiException("迅雷云盘验证码刷新后仍失败："
                 + Truncate(second.ErrorText, 200));
@@ -1446,6 +1630,21 @@ namespace GeZi.Providers.Xunlei
             {
                 return "/";
             }
+        }
+
+        /// <summary>
+        /// 把 <c>query</c> 里那份 device_id 副本同步成当前的 <see cref="_deviceId"/>。
+        /// <para>
+        /// 🚨 2026-11-15：<c>query</c> 是构造时按值拷进去的，改 <c>_deviceId</c> 不会改到它。
+        /// 不同步的话，请求头是新设备号、URL 里是旧设备号，服务端直接判 device not match。
+        /// </para>
+        /// </summary>
+        private static void SyncDeviceIdInQuery(Dictionary<string, string> query, string deviceId)
+        {
+            if (query == null || string.IsNullOrEmpty(deviceId))
+                return;
+            if (query.ContainsKey(XunleiConstants.DeviceIdParam))
+                query[XunleiConstants.DeviceIdParam] = deviceId;
         }
 
         private static string BuildUrl(string baseUrl, Dictionary<string, string> query)

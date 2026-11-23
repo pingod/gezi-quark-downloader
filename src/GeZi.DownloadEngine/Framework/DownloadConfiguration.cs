@@ -26,6 +26,8 @@ public class DownloadConfiguration : ICloneable, INotifyPropertyChanged
     private bool _clearPackageOnCompletionWithFailure;
     private long _minimumSizeOfChunking;
     private bool _reserveStorageSpaceBeforeStartingDownload;
+    private bool _trustExpectedHash = true;
+    private bool _quickVerify;
 
     // 不挂空委托：OnPropertyChanged 里已经用 `PropertyChanged?.Invoke(...)` 判空，
     // 再挂一个 `delegate { }` 只会让每次无订阅的赋值都白调一次空方法。
@@ -938,6 +940,31 @@ public class DownloadConfiguration : ICloneable, INotifyPropertyChanged
         }
     }
 
+    private int _stalledChunkRounds = 30;
+
+    /// <summary>
+    /// 一片连续多少轮重试**一个字节都没下动**就熔断（2026-11-14，「失败永不判死」配套）。
+    /// <para>
+    /// 背景：分片重试额度是 <c>int.MaxValue</c>（无限），一条死掉/被限速到 0 的连接会永远
+    /// 在「失败 → 退避 → 重连 → 再失败」里打转，界面卡在 99.x% 看似死机（issue #21）。
+    /// 达到本阈值后抛 <see cref="ChunkStalledException"/>，**只让本轮收手**：
+    /// 续传快照照常保存、任务标成「失败（可继续）」，用户重试即可从断点接着下。
+    /// </para>
+    /// <para>
+    /// 取值理由：一轮重试的退避是 150ms→5s 指数增长，30 轮约等于「连续十几分钟毫无进展」，
+    /// 正常网络抖动绝不可能连续 30 轮零字节。设 0 或负数表示关闭熔断（退回旧行为）。
+    /// </para>
+    /// </summary>
+    public int StalledChunkRounds
+    {
+        get => _stalledChunkRounds;
+        set
+        {
+            _stalledChunkRounds = value;
+            OnPropertyChanged();
+        }
+    }
+
     /// <summary>
     /// Download file chunks as Parallel or Serial?
     /// </summary>
@@ -1044,6 +1071,57 @@ public class DownloadConfiguration : ICloneable, INotifyPropertyChanged
         set
         {
             _minimumSizeOfChunking = value;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>
+    /// 是否信任网盘接口给的哈希，进而跑全量哈希比对。
+    /// <para>
+    /// 🚨 2026-11-14：夸克 / UC 的 <c>md5</c> 字段与真实下发内容不符（2026-10-24 全量逐字节
+    /// 比对已坐实）。对这两个来源跑全量 SHA-256 的结局只有两种，都是白干：
+    /// </para>
+    /// <list type="bullet">
+    /// <item>不一致 → 走抽样复核 → 命中 <c>Md5Untrusted</c> 缓存后按「元数据不可信」放行；</item>
+    /// <item>不一致 → 抽样也拿不到远端样本 → 仍按「元数据问题」放行。</item>
+    /// </list>
+    /// <para>
+    /// 也就是说**结论永远是「文件可用」**，但代价是 22GB 文件白白顺序读一遍
+    /// （托管 SHA-256 约 100~200 MB/s ⇒ 110~220 秒，用户体感就是「卡在 99%」）。
+    /// </para>
+    /// <para>
+    /// 设为 <c>false</c> 时改走两条**不读全文件**的判据：分片覆盖校验（片片写满 + 首尾相接
+    /// + 总长吻合）+ 4 段抽样逐字节复核（只在收尾做，几百毫秒）。
+    /// </para>
+    /// <para>
+    /// ⚠️ 默认 <c>true</c>（保持原行为）。只有确认哈希来源不可信的网盘才置 <c>false</c>。
+    /// </para>
+    /// </summary>
+    public bool TrustExpectedHash
+    {
+        get => _trustExpectedHash;
+        set
+        {
+            _trustExpectedHash = value;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>
+    /// 快速校验：下载完成后**不跑全量哈希、不跑网络抽样**，只用「分片覆盖 + 长度」判完整。
+    /// <para>
+    /// 默认 <c>false</c>（保持旧行为）。<c>true</c> 时 <see cref="DownloadService.VerifyContentAsync"/>
+    /// 会跳过 <c>CrossCheckAsync</c>（网络抽样）与 <c>validator.VerifyAsync</c>（全量哈希），
+    /// 只走 <c>VerifyChunkCoverage</c> 这条纯内存毫秒级判据，把收尾校验从分钟/秒级压到毫秒级。
+    /// 「长度不符 → 自动换链」的自愈在 <c>FusionDownloader</c> 外层，不受影响。
+    /// </para>
+    /// </summary>
+    public bool QuickVerify
+    {
+        get => _quickVerify;
+        set
+        {
+            _quickVerify = value;
             OnPropertyChanged();
         }
     }

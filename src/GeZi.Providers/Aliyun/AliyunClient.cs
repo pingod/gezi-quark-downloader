@@ -781,6 +781,67 @@ namespace GeZi.Providers.Aliyun
             return merged;
         }
 
+        /// <summary>
+        /// 轻量探测分享是否还有效：**只换 share_token**，不列目录。
+        /// <para>
+        /// 阿里换 share_token 的接口（<c>/v2/share_link/get_share_token</c>）本身就会
+        /// 明确报出「链接已失效 / 被取消」与「提取码不正确」，正好是我们要的两种结论；
+        /// 其它异常（网络、TLS、令牌过期）一律当「判断不了」。
+        /// </para>
+        /// </summary>
+        public async Task<ShareProbeResult> ProbeShareAsync(
+            PanShareRef shareRef, CancellationToken cancel = default)
+        {
+            if (shareRef == null || string.IsNullOrEmpty(shareRef.ShareId))
+                return new ShareProbeResult { Status = ShareProbeStatus.Unknown, Reason = "分享 ID 为空" };
+
+            try
+            {
+                string token = await GetShareTokenAsync(shareRef.ShareId, shareRef.Passcode ?? "", cancel)
+                    .ConfigureAwait(false);
+                if (string.IsNullOrEmpty(token))
+                {
+                    return new ShareProbeResult
+                    {
+                        Status = ShareProbeStatus.Invalid,
+                        Reason = "链接已失效，或提取码不对",
+                    };
+                }
+                return new ShareProbeResult { Status = ShareProbeStatus.Alive };
+            }
+            catch (QuarkApiException ex)
+            {
+                return new ShareProbeResult
+                {
+                    Status = ShareProbeStatus.Invalid,
+                    Reason = DescribeProbeError(ex),
+                };
+            }
+            catch (Exception)
+            {
+                return new ShareProbeResult
+                {
+                    Status = ShareProbeStatus.Unknown,
+                    Reason = "网络没通，暂时判断不了",
+                };
+            }
+        }
+
+        /// <summary>把阿里的报错翻成一句人话。</summary>
+        private static string DescribeProbeError(QuarkApiException ex)
+        {
+            string msg = ex != null && ex.Message != null ? ex.Message : "";
+            if (msg.IndexOf("提取码", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("密码", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("password", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "提取码不对";
+            if (msg.IndexOf("失效", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("取消", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("不存在", StringComparison.Ordinal) >= 0)
+                return "链接已失效";
+            return "链接已失效或提取码不对";
+        }
+
         // ---------------- 免转存取直链 ----------------
 
         /// <summary>
@@ -893,8 +954,17 @@ namespace GeZi.Providers.Aliyun
                             ? (PanJson.AsString(PanJson.Get(res, "name")) ?? f.Fid)
                             : f.Name,
                         Size = f.Size > 0 ? f.Size : PanJson.AsLong(PanJson.Get(res, "size")),
-                        Md5 = f.Md5 ?? PanJson.AsString(PanJson.Get(res, "content_hash")),
-                        Sha1 = f.Sha1,
+                        // 🚨🚨 2026-11-14 修：这里原来是
+                        //     Md5 = f.Md5 ?? PanJson.AsString(PanJson.Get(res, "content_hash")),
+                        // 把阿里的 content_hash 当成 md5 兜底 —— 但 content_hash 实际是 **sha1**
+                        // （见本文件 ToFileEntry 里的注释「阿里的 content_hash 通常是 sha1，这里按 sha1 存」）。
+                        // 后果：sha1 的值被塞进 Md5 字段，校验时算 md5 去比 sha1，**必然 100% 不一致**，
+                        // 用户每个阿里文件下完都看到「MD5 不一致」，还会多跑一遍 12 秒抽样复核。
+                        // 现在：md5 只认 f.Md5；content_hash 只在 sha1 缺失时当 sha1 用（它本来就是）。
+                        Md5 = f.Md5,
+                        Sha1 = !string.IsNullOrEmpty(f.Sha1)
+                            ? f.Sha1
+                            : PanJson.AsString(PanJson.Get(res, "content_hash")),
                         Sha256 = f.Sha256,
                         // 走了转存兜底才有值；下载结束由上层调 CleanupStoredAsync 删这个目录。
                         StoredId = storedFolder,

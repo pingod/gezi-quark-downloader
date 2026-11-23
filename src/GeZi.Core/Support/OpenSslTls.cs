@@ -694,7 +694,19 @@ namespace GeZi.Core.Support
                     // 连接被 Close() 强行打断：bezzad 靠 ObjectDisposedException 识别"读超时"
                     if (_disposed) throw new ObjectDisposedException("OpenChunkStream");
                     // 6 = SSL_ERROR_ZERO_RETURN，对端正常关闭，等价 EOF
-                    if (err == 6) return 0;
+                    if (err == 6)
+                    {
+                        // 🚨🚨 2026-11-14 修「结尾卡 99%、重启续传才恢复」：
+                        //   对端优雅关闭（FIN）时，若本片字节还没读完（_remaining > 0），
+                        //   那是「提前断开」，不能伪装成正常 EOF return 0 ——
+                        //   否则半截 chunk 静默返回、脱离队列，worker 空转死锁（卡 99%）。
+                        //   只有 _remaining <= 0（真的读满，或未限上界的单片）才 return 0。
+                        //   ⚠️ 消息必须含「连接已关闭」：ExceptionHelper.IsTransportIo 认这个
+                        //      关键字，IOException 才能走「可重试」路径而不是被判死。
+                        if (_remaining > 0)
+                            throw new IOException("连接已关闭（提前 EOF），本分片还剩 " + _remaining + " 字节未读完");
+                        return 0;
+                    }
                     // 5 = SSL_ERROR_SYSCALL：socket 被关闭或读超时
                     if (err == 5) throw new IOException("OpenSSL 连接中断（SSL_ERROR_SYSCALL）");
                     throw new IOException("SSL_read 失败 (SSL_get_error=" + err + "): " + Native.ErrText());

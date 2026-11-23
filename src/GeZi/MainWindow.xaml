@@ -442,6 +442,63 @@
                                              AutomationProperties.Name="分享链接输入框"
                                              DataObject.Pasting="OnLinkBoxPasting"
                                              >
+                                        <!-- ⚠️ 2026-11-15 用户要求「在链接输入位置右键选择收藏链接」。
+                                             WPF 的 TextBox 一旦设了 ContextMenu，**默认的复制/粘贴/全选就没了**，
+                                             所以这里必须把那几个标准项一起补回来，
+                                             否则用户右键想复制，结果什么都复制不了（这是明显的倒退）。
+                                             「收藏链接」放在最上面（用户最常用的动作）。 -->
+                                        <TextBox.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem x:Name="FavoriteLinkMenuItem" Header="收藏链接"
+                                                          Click="OnFavoriteLinkClick">
+                                                    <MenuItem.Icon>
+                                                        <Path Data="{StaticResource IconStar}" Stretch="Uniform"
+                                                              Width="14" Height="14"
+                                                              Stroke="{DynamicResource TextSecondaryBrush}" StrokeThickness="1.7"
+                                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                              StrokeLineJoin="Round"/>
+                                                    </MenuItem.Icon>
+                                                </MenuItem>
+                                                <Separator/>
+                                                <MenuItem Header="剪切" Command="ApplicationCommands.Cut">
+                                                    <MenuItem.Icon>
+                                                        <Path Data="{StaticResource IconScissors}" Stretch="Uniform"
+                                                              Width="14" Height="14"
+                                                              Stroke="{DynamicResource TextSecondaryBrush}" StrokeThickness="1.7"
+                                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                              StrokeLineJoin="Round"/>
+                                                    </MenuItem.Icon>
+                                                </MenuItem>
+                                                <MenuItem Header="复制" Command="ApplicationCommands.Copy">
+                                                    <MenuItem.Icon>
+                                                        <Path Data="{StaticResource IconCopy}" Stretch="Uniform"
+                                                              Width="14" Height="14"
+                                                              Stroke="{DynamicResource TextSecondaryBrush}" StrokeThickness="1.7"
+                                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                              StrokeLineJoin="Round"/>
+                                                    </MenuItem.Icon>
+                                                </MenuItem>
+                                                <MenuItem Header="粘贴" Command="ApplicationCommands.Paste">
+                                                    <MenuItem.Icon>
+                                                        <Path Data="{StaticResource IconClipboard}" Stretch="Uniform"
+                                                              Width="14" Height="14"
+                                                              Stroke="{DynamicResource TextSecondaryBrush}" StrokeThickness="1.7"
+                                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                              StrokeLineJoin="Round"/>
+                                                    </MenuItem.Icon>
+                                                </MenuItem>
+                                                <Separator/>
+                                                <MenuItem Header="全选" Command="ApplicationCommands.SelectAll">
+                                                    <MenuItem.Icon>
+                                                        <Path Data="{StaticResource IconSelectAll}" Stretch="Uniform"
+                                                              Width="14" Height="14"
+                                                              Stroke="{DynamicResource TextSecondaryBrush}" StrokeThickness="1.7"
+                                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                              StrokeLineJoin="Round"/>
+                                                    </MenuItem.Icon>
+                                                </MenuItem>
+                                            </ContextMenu>
+                                        </TextBox.ContextMenu>
                                         <TextBox.Style>
                                             <!-- 上一版按 Raycast 做成"输入框完全无边框无底色"，
                                                  结果在白卡片上**彻底看不见** —— 用户反馈「解析框不见了」，
@@ -650,6 +707,28 @@
                                                      ToolTip="按名称筛选当前目录的文件/文件夹"/>
                                         </Grid>
                                     </Border>
+                                    <!-- 收藏：用户 2026-11-15 要求「在搜索框和上级中间增加收藏功能」。
+                                         图标是**空心星星**，取自图标库（Icons.xaml 的 IconStar，
+                                         来自 Lucide 官方 star 几何，描边只能上 Stroke）。
+                                         ⚠️ 这条工具栏是「我的网盘」与「分享链接」两模式共用的，
+                                         所以收藏在两边都显示（收藏的是分享链接/文件，
+                                         在「我的网盘」模式下打开收藏列表也照样能点开重新解析）。
+                                         🚨 2026-11-15 用户指出「光一个星图标太丑了」——
+                                            同排的「上级」「刷新」「解析历史」都是「图标 + 文字」，
+                                            只有收藏是纯图标，看着不齐 ⇒ 补上「收藏」两个字。 -->
+                                    <Button x:Name="FavoriteBtn" Click="OnFavoriteButtonClick"
+                                            Style="{StaticResource ToolButton}" Margin="0,0,4,0"
+                                            ToolTip="收藏夹">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Path Data="{StaticResource IconStar}" Stretch="Uniform"
+                                                  Width="13" Height="13" VerticalAlignment="Center"
+                                                  Stroke="{DynamicResource TextSecondaryBrush}"
+                                                  StrokeThickness="1.8"
+                                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                  StrokeLineJoin="Round"/>
+                                            <TextBlock Text="收藏" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
                                     <Button x:Name="DriveUpBtn" Click="OnUp" Style="{StaticResource ToolButton}"
                                             ToolTip="返回上级目录">
                                         <StackPanel Orientation="Horizontal">
@@ -773,6 +852,22 @@
                                                 <Path Data="{StaticResource IconTrash}" Stretch="Uniform"
                                                       Width="14" Height="14"
                                                       Stroke="{DynamicResource DangerBrush}" StrokeThickness="1.7"
+                                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                      StrokeLineJoin="Round"/>
+                                            </MenuItem.Icon>
+                                        </MenuItem>
+                                        <!-- 收藏文件（用户 2026-11-15 要求）：
+                                             「在解析完后的链接中右键文件选择收藏文件」。
+                                             ⚠️ 只在**分享模式**下有意义——「我的网盘」里的文件
+                                             没有对应的分享链接，收藏了也点不开。
+                                             可见性在 OnFileContextMenuOpened 里统一设（ContextMenu.Opened 时机）。 -->
+                                        <MenuItem x:Name="FavoriteFileMenuItem" Header="收藏文件"
+                                                  Click="OnFavoriteFileClick"
+                                                  Visibility="Collapsed">
+                                            <MenuItem.Icon>
+                                                <Path Data="{StaticResource IconStar}" Stretch="Uniform"
+                                                      Width="14" Height="14"
+                                                      Stroke="{DynamicResource TextSecondaryBrush}" StrokeThickness="1.7"
                                                       StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                                       StrokeLineJoin="Round"/>
                                             </MenuItem.Icon>
@@ -1192,6 +1287,19 @@
                                                 <Path Data="{StaticResource IconClose}" Stretch="Uniform"
                                                       Width="14" Height="14"
                                                       Stroke="{DynamicResource DangerBrush}" StrokeThickness="1.7"
+                                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                      StrokeLineJoin="Round"/>
+                                            </MenuItem.Icon>
+                                        </MenuItem>
+                                        <!-- 🚨 2026-11-14 新增：失败任务的「重试下载」。
+                                             只在选中里有 Failed 任务时可见（见 OnTaskContextMenuOpened）。
+                                             走的是与「未完成」入口完全相同的续传链路，从断点接着下。 -->
+                                        <MenuItem x:Name="TaskRetryItem" Header="重试下载" Click="OnTaskRetry"
+                                                  Foreground="{DynamicResource TextPrimaryBrush}">
+                                            <MenuItem.Icon>
+                                                <Path Data="{StaticResource IconRefresh}" Stretch="Uniform"
+                                                      Width="14" Height="14"
+                                                      Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="1.7"
                                                       StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                                       StrokeLineJoin="Round"/>
                                             </MenuItem.Icon>
@@ -1974,11 +2082,11 @@
                                                           Style="{StaticResource AppComboBox}"
                                                           ItemContainerStyle="{StaticResource AppComboBoxItem}"
                                                           SelectionChanged="OnGuardedSettingChanged"
-                                                          ToolTip="目标文件在机械盘时自动降到这个数，避免磁头频繁寻道。固态盘不受影响。">
-                                                    <ComboBoxItem Content="32  — 最护盘，速度较慢"/>
+                                                          ToolTip="目标文件在机械盘时自动降到这个数，避免磁头频繁寻道。固态盘不受影响。机械盘随机写受寻道限制，并发越高越慢——32~64 才是它的甜点。">
+                                                    <ComboBoxItem Content="32  — 机械盘推荐，寻道最少"/>
                                                     <ComboBoxItem Content="64  — 保守"/>
                                                     <ComboBoxItem Content="96  — 折中"/>
-                                                    <ComboBoxItem Content="128 — 默认，推荐"/>
+                                                    <ComboBoxItem Content="128 — 高并发，机械盘会掉速"/>
                                                     <ComboBoxItem Content="192 — 较快"/>
                                                     <ComboBoxItem Content="256 — 最快，寻道压力大"/>
                                                     <ComboBoxItem Content="512 — 极高并发"/>
@@ -2039,14 +2147,42 @@
                                          🚨 2026-11-03：原来它横跨两列占满整行、内容只有一行，
                                          下方大片空白。现在放进右列第三行，与左列「存储」对齐，
                                          两列高度自然一致，整页也不需要滚动条了。 -->
-                                    <Border Grid.Row="1" Style="{StaticResource SettingsCard}"
-                                            Margin="0" HorizontalAlignment="Stretch"
-                                            VerticalAlignment="Stretch"
-                                            MinHeight="132">
-                                        <!-- 🚨 2026-11-07 MinHeight="132" 是「加字把卡片顶大」的硬保护：
-                                             本卡高度 = 外层行高 H − (存储 + 外观)，H = max(左右列自然高)。
-                                             一旦文案再变长让右列反超左列，本卡会退回自然高 → 变大且左列短一截。
-                                             132 = 设计高度，超了宁可裁切也不要整卡撑开（见下方文案处的长注释）。 -->
+                                    <StackPanel Grid.Row="1" VerticalAlignment="Top">
+                                    <!-- 风控参谋：被动采集真实下载记录，攒够样本后给建议。
+                                         只观察、不主动探测 —— 每次任务结束后记一笔「网盘+线程+峰值速度+是否停滞」，
+                                         攒够 3 次才参谋。点「查看」弹小窗展示，卡片本身只留标题+一行介绍。 -->
+                                    <Border Style="{StaticResource SettingsCard}"
+                                            Margin="0" HorizontalAlignment="Stretch">
+                                        <StackPanel>
+                                            <Grid Style="{StaticResource SettingsCardHeader}">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Path Data="{StaticResource IconDiagnostics}" Stretch="Uniform"
+                                                          Width="16" Height="16" VerticalAlignment="Center"
+                                                          Stroke="{DynamicResource TextTertiaryBrush}" StrokeThickness="1.7"/>
+                                                    <TextBlock Text="风控参谋" Style="{StaticResource SettingsCardTitle}"
+                                                               Margin="10,0,0,0"/>
+                                                </StackPanel>
+                                                <Button Grid.Column="1" x:Name="AdvisorViewButton" Content="查看"
+                                                        MinWidth="72" Height="30" Padding="14,0"
+                                                        HorizontalAlignment="Right"
+                                                        Style="{StaticResource SecondaryButton}"
+                                                        Click="OnAdvisorViewClick"/>
+                                            </Grid>
+                                            <TextBlock FontSize="12" TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource TextTertiaryBrush}"
+                                                       Text="被动观察真实下载记录，攒够几次后给出各网盘的安全并发建议。"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource SettingsCard}"
+                                            Margin="0,12,0,0" HorizontalAlignment="Stretch">
+                                        <!-- 🚨 2026-11-14：去掉 VerticalAlignment=Stretch 和 MinHeight=132。
+                                             本卡在左列 Row 1（Height=*）里，Stretch 会把它撑到吃满剩余空间，
+                                             而内容只有 120px 左右 → 卡片内部下方一大片空白（用户截图指出的问题）。
+                                             改成 Top 让卡片按内容高度收缩，空白落在卡片外而不是卡片内。 -->
                                         <StackPanel>
                                             <!-- 标题行（与其它卡一致的图标+标题） -->
                                             <Grid Style="{StaticResource SettingsCardHeader}">
@@ -2131,6 +2267,8 @@
                                                        Text="VLC 免费开源、几乎什么格式都能播；用它边下边播，没下完也能看已缓存的部分。没装 VLC 时用系统默认播放器打开。"/>
                                         </StackPanel>
                                     </Border>
+
+                                    </StackPanel>
                                     </Grid>
 
                                     <!-- ==================== 右列 ==================== -->
@@ -2216,12 +2354,32 @@
                                                     <CheckBox x:Name="AutoCleanCheck"
                                                               Content="下载完成后自动清理云盘转存文件"
                                                               Style="{StaticResource AppCheckBox}"
-                                                              VerticalAlignment="Center"
+                                                              Margin="0,8,0,0"
                                                               Click="OnGuardedSettingClick"/>
                                                     <TextBlock Style="{StaticResource SettingsRowHint}"
                                                                Margin="0,7,0,0" MaxWidth="300"
                                                                HorizontalAlignment="Left"
                                                                Text="四家网盘都生效。关掉后转存副本会保留在你的网盘里。"/>
+                                                </StackPanel>
+                                            </Grid>
+
+                                            <Grid Style="{StaticResource SettingsRow3}" Margin="0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="160"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="严格校验"
+                                                           Style="{StaticResource SettingsRowLabel}"/>
+                                                <StackPanel Grid.Column="1">
+                                                    <CheckBox x:Name="StrictVerifyCheck"
+                                                              Content="下载完成后全量哈希校验"
+                                                              Style="{StaticResource AppCheckBox}"
+                                                              Margin="0,8,0,0"
+                                                              Click="OnGuardedSettingClick"/>
+                                                    <TextBlock Style="{StaticResource SettingsRowHint}"
+                                                               Margin="0,7,0,0" MaxWidth="300"
+                                                               HorizontalAlignment="Left"
+                                                               Text="开启后将进行严格校验。"/>
                                                 </StackPanel>
                                             </Grid>
                                         </StackPanel>
@@ -3349,6 +3507,98 @@
                                         Style="{StaticResource SecondaryButton}"
                                         Padding="12,5" FontSize="12" Margin="12,0,0,0"
                                         ToolTip="清空全部解析历史"/>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <!-- ================= 收藏夹 =================
+                 用户 2026-11-15 要求：「在搜索框和上级中间增加收藏功能（空心星星图标）」，
+                 「解析一个链接后可以在链接输入位置右键选择收藏链接」，
+                 「在解析完后的链接中右键文件选择收藏文件」，
+                 「点击收藏功能，就有个弹窗能够看到这些收藏，具体方式可复用解析历史的功能代码ui」。
+                 ⇒ 结构**完全照抄解析历史面板**（居中卡片 + 压暗遮罩 + 头/列表/脚三行），
+                 只是图标换成空心星星、文案换成收藏。
+                 Esc 关闭：见 MainWindow.Misc.cs 的 OnMainKeyDown（同时判 HistoryOpen 与 FavoriteOpen）。 -->
+            <Grid x:Name="FavoriteOverlay" Grid.RowSpan="2" Visibility="Collapsed"
+                  Focusable="True" FocusVisualStyle="{x:Null}">
+                <!-- 遮罩：点它 = 关闭 -->
+                <Border Background="{DynamicResource OverlayBrush}"
+                        MouseLeftButtonDown="OnFavoriteOverlayClick"/>
+
+                <Border Width="580" MaxHeight="500"
+                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Background="{DynamicResource SurfaceBrush}"
+                        BorderBrush="{DynamicResource BorderBrushSoft}" BorderThickness="1"
+                        CornerRadius="12">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- 头：空心星星图标 + 标题 + 条数 + 右上角关闭叉号 -->
+                        <Grid Grid.Row="0" Margin="18,16,14,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal"
+                                        VerticalAlignment="Center">
+                                <Path Data="{StaticResource IconStar}" Stretch="Uniform"
+                                      Width="17" Height="17" VerticalAlignment="Center"
+                                      Stroke="{DynamicResource TextPrimaryBrush}" StrokeThickness="1.8"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round"/>
+                                <TextBlock Text="收藏夹" Margin="9,0,0,0" FontSize="14"
+                                           FontWeight="SemiBold" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"/>
+                                <TextBlock x:Name="FavoriteCountText" Margin="9,0,0,0" FontSize="11"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextTertiaryBrush}"/>
+                            </StackPanel>
+                            <Button Grid.Column="1"
+                                    Click="OnFavoriteCloseClick"
+                                    Style="{StaticResource IconGhostButton}"
+                                    Width="28" Height="28" Focusable="False"
+                                    AutomationProperties.Name="关闭收藏夹"
+                                    ToolTip="关闭">
+                                <Path Data="{StaticResource IconClose}" Stretch="Uniform"
+                                      Width="11" Height="11"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                      Stroke="{DynamicResource TextSecondaryBrush}" StrokeThickness="1.8"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round"/>
+                            </Button>
+                        </Grid>
+
+                        <!-- 列表（内容由 RebuildFavoritePanel 动态生成） -->
+                        <ScrollViewer x:Name="FavoriteScroll"
+                                      Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                                      Padding="10,0,10,12">
+                            <StackPanel x:Name="FavoriteListPanel"/>
+                        </ScrollViewer>
+
+                        <!-- 脚：左侧提示 + 右下角「清空」按钮（与解析历史一致） -->
+                        <Border Grid.Row="2" BorderThickness="0,1,0,0"
+                                BorderBrush="{DynamicResource BorderBrushSoft}"
+                                Padding="18,10,14,10">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" FontSize="11" TextWrapping="Wrap"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextTertiaryBrush}"
+                                           Text="点任意一条即可重新打开那个分享 · 右键可删除 · 按 Esc、或点面板外的空白处关闭"/>
+                                <Button Grid.Column="1" Content="清空"
+                                        Click="OnFavoriteClearClick"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Padding="12,5" FontSize="12" Margin="12,0,0,0"
+                                        ToolTip="清空全部收藏"/>
                             </Grid>
                         </Border>
                     </Grid>

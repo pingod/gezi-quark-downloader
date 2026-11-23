@@ -8,10 +8,10 @@
   <img src="src/GeZi/Resources/app-logo.png" width="120" alt="鸽子下载">
 </p>
 <p align="center">
-  <img src="https://img.shields.io/github/repo-size/huaotem-bot/gezi-quark-downloader?style=social" alt="Repo Size">
-  <img src="https://visitor-badge.laobi.icu/badge?page_id=huaotem-bot.gezi-quark-downloader&radius=12" alt="Visitors">
-  <img src="https://img.shields.io/github/license/huaotem-bot/gezi-quark-downloader?style=social" alt="License">
-  <img src="https://img.shields.io/github/stars/huaotem-bot/gezi-quark-downloader?style=social" alt="Stars">
+  <img src="https://img.shields.io/github/repo-size/huaotem-bot/GeZi-downloader?style=social" alt="Repo Size">
+  <img src="https://visitor-badge.laobi.icu/badge?page_id=huaotem-bot.GeZi-downloader&radius=12" alt="Visitors">
+  <img src="https://img.shields.io/github/license/huaotem-bot/GeZi-downloader?style=social" alt="License">
+  <img src="https://img.shields.io/github/stars/huaotem-bot/GeZi-downloader?style=social" alt="Stars">
 </p>
 
 ---
@@ -41,8 +41,8 @@
 |---|---|---|
 | 夸克网盘 | ✅ | 已上线 |
 | UC 网盘 | ✅ | 已上线 |
-| 阿里云盘 | ✅ | 已上线 |
-| 迅雷云盘 | ✅ | 已上线 |
+| 阿里云盘 | ❌ | 已上线 |
+| 迅雷云盘 | ❌ | 已上线 |
 
 **怎么用**：设置页「网盘线程设置」可分别调四家并发；主界面粘分享链接 → 解析。
 程序按域名自动判断网盘。
@@ -77,7 +77,7 @@
 
 ### 方式一：下载发行版（推荐）
 
-1. 从 [Releases](https://github.com/huaotem-bot/gezi-quark-downloader/releases) 下载 `GeZi-v2.4.0-win-x64.zip` 并解压到任意目录
+1. 从 [Releases](https://github.com/huaotem-bot/GeZi-downloader/releases) 下载 `GeZi-v2.4.4-win-x64.zip` 并解压到任意目录
 2. 双击 `GeZi-download.exe` 即可运行
 3. 若系统缺少 .NET Framework 4.8，Windows 会弹窗提示，按引导安装即可
 

@@ -441,6 +441,9 @@ namespace GeZi
                     item.Speed = u.Progress.Speed;
                     // 🚨 2026-11-07：界面显示用 5 秒平滑速度；调度水位仍读 item.Speed。
                     item.DisplaySpeed = u.Progress.DisplaySpeed;
+                    // 风控参谋：维护「本次任务峰值速度」，终态采集时用它当样本值
+                    //（收尾那一帧速度趋近 0，没参考价值）。
+                    item.TrackPeak(u.Progress.DisplaySpeed);
                     item.Done = u.Progress.Done;
                     item.Total = u.Progress.Total;
                 }
@@ -484,6 +487,13 @@ namespace GeZi
                     : u.State == JobState.Failed ? "失败" : "已取消";
                 long sizeBytes = item.Total > 0 ? item.Total : item.Done;
                 HistoryStore.AddHistory(item.Name, Util.FormatSize(sizeBytes), item.Job.Dest, status);
+
+                // ---- 风控参谋：任务结束采集一条被动样本（只观察，不主动探测）----
+                // 判据：只有「真正跑起来过」的任务才记 —— 刚点下载就取消/失败、
+                // 或根本没启动 worker 的任务，没有并发/速度数据，记进去只会污染参谋。
+                // 完成后 worker 会被释放、WorkerCount 可能已归 0，但 OnDiagnostics 每 5 秒
+                // 喂一次、终态前的最后一帧已把它钉在 item 上，这里取到的就是真实并发上限。
+                RecordAdvisorSample(item, u.State == JobState.Completed);
 
                 // 阿里 / 迅雷分享取链前必须转存一份到自己网盘，下载结束要删掉，
                 // 否则用户网盘里会堆满垃圾。**只能等终态删**：下载中途删会让 CDN 回源 503。
@@ -589,6 +599,12 @@ namespace GeZi
             TaskPauseResumeItem.Visibility = anyLive ? Visibility.Visible : Visibility.Collapsed;
             TaskCancelItem.Visibility = anyLive ? Visibility.Visible : Visibility.Collapsed;
 
+            // 🚨 2026-11-14 新增：「重试下载」只在选中里有失败任务时出现。
+            //   失败任务现在可以续传（SyncPending 已把它写进待续传记录），
+            //   这条入口就是用户「让失败的文件接着下」的唯一按钮。
+            bool anyFailed = list.Any(x => x.State == JobState.Failed);
+            TaskRetryItem.Visibility = anyFailed ? Visibility.Visible : Visibility.Collapsed;
+
             // 播放：只要选中里有一个能播就显示（多选时点一下打开第一个能播的）。
             TaskPlayItem.Visibility = list.Any(x => x.CanPlay)
                 ? Visibility.Visible : Visibility.Collapsed;
@@ -597,8 +613,27 @@ namespace GeZi
             // 2026-11-01：「仅移除记录」及其专属分隔线 TaskMenuSep2 已删除，
             // 现在只剩 TaskMenuSep1 一条，用来隔开「终止类操作」与「打开类操作」。
             TaskMenuSep1.Visibility = (TaskPlayItem.Visibility == Visibility.Visible
-                                       || TaskCancelItem.Visibility == Visibility.Visible)
+                                       || TaskCancelItem.Visibility == Visibility.Visible
+                                       || TaskRetryItem.Visibility == Visibility.Visible)
                 ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+
+        /// <summary>
+        /// 「重试下载」：让失败的任务从断点接着下。
+        /// <para>
+        /// 与 <see cref="ResumeTask"/> 里的 Failed 分支是同一件事，这里只是多选入口。
+        /// </para>
+        /// </summary>
+        private void OnTaskRetry(object sender, RoutedEventArgs e)
+        {
+            var list = TasksFromMenu(sender);
+            if (list.Count == 0) return;
+            foreach (var t in list)
+            {
+                if (t.State != JobState.Failed) continue;
+                ResumeTask(t);
+            }
         }
 
 
@@ -1547,6 +1582,37 @@ namespace GeZi
         /// 这家网盘在本机有没有可用的凭证（与 RefreshPanCards 的判据保持一致）。
         /// 阿里/迅雷的凭证存在配置里而不是账号档案里，必须单独查。
         /// </summary>
+        /// <summary>
+        /// 取出某家网盘**当前保存在配置里的凭证**（夸克/UC 是 Cookie 串，阿里是 refresh_token，
+        /// 迅雷是 pan_token）。只用于账号列表里判断「哪一行是当前账号」的兜底比对，
+        /// 不做任何网络请求。
+        /// <para>
+        /// 🚨 2026-11-14：账号列表原来统一用 `_client?.CookieStr ?? _settings.Cookie`，
+        /// 那只覆盖夸克。阿里/迅雷下 `_client` 是 null（它们走 `_ownProvider`），
+        /// 于是每一行都拿夸克 Cookie 去比，永远比不中 → 当前账号那一行不高亮。
+        /// </para>
+        /// </summary>
+        private string PanCredentialFor(PanKind kind)
+        {
+            switch (kind)
+            {
+                case PanKind.Uc:
+                    return _settings.UcCookie ?? "";
+                case PanKind.Aliyun:
+                    // 阿里档案里存的是 refresh_token；access_token 是短期的，只作兜底。
+                    return !string.IsNullOrWhiteSpace(_settings.AliyunRefreshToken)
+                        ? _settings.AliyunRefreshToken
+                        : (_settings.AliyunAccessToken ?? "");
+                case PanKind.Xunlei:
+                    return _settings.XunleiPanToken ?? "";
+                default:
+                    return _client != null && !string.IsNullOrEmpty(_client.CookieStr)
+                        ? _client.CookieStr
+                        : (_settings.Cookie ?? "");
+            }
+        }
+
+
         private bool HasPanCredential(PanKind kind)
         {
             switch (kind)
@@ -1690,7 +1756,15 @@ namespace GeZi
                 {
                     QuarkClient c;
                     if (!_quarkCache.TryGetValue(kind, out c) || c == null)
-                        return;
+                    {
+                        // 🚨 2026-11-14 修「容量二次失败」：切网盘时 ActivateCachedPanAsync
+                        //   已把实例从缓存 Remove 出来、挂到 _client 上，所以这里缓存 miss。
+                        //   若这一家恰好是当前激活账号，就退回用 _client，别再直接 return
+                        //   （否则「启动时容量没查到 → 切过去想补查 → 又因缓存 miss 空转」）。
+                        c = (IsLoggedInAny && _activeKind == kind) ? _client : null;
+                        if (c == null)
+                            return;
+                    }
                     var cap = await c.GetCapacityAsync().ConfigureAwait(true);
                     total = cap.total;
                     used = cap.used;
@@ -1699,7 +1773,12 @@ namespace GeZi
                 {
                     IPanProvider p;
                     if (!_providerCache.TryGetValue(kind, out p) || p == null)
-                        return;
+                    {
+                        // 同上：当前激活账号的 provider 挂在 _ownProvider 上，缓存已被 Remove。
+                        p = (IsLoggedInAny && _activeKind == kind) ? _ownProvider : null;
+                        if (p == null)
+                            return;
+                    }
                     var sp = await p.GetSpaceAsync().ConfigureAwait(true);
                     if (sp == null)
                         return;
@@ -1870,6 +1949,10 @@ namespace GeZi
                                     try { p.Dispose(); } catch { }
                                 if (kind == PanKind.Aliyun)
                                     TryAutoRenewAliyunCredential("缺少可续期的令牌");
+                                // 迅雷 pan_token 为空但手里有 refresh_token：同样交给自动续期换新，
+                                // 而不是直接判"未登录"。
+                                else if (kind == PanKind.Xunlei)
+                                    TryAutoRenewXunleiCredential("缺少可用的令牌");
                                 continue;
                             }
                             try
@@ -1939,6 +2022,11 @@ namespace GeZi
                             // 用户要求做成全自动：察觉失效就续期，不需要点任何按钮。
                             if (kind == PanKind.Aliyun)
                                 TryAutoRenewAliyunCredential("校验未通过");
+                            // 迅雷 pan_token 约两小时寿命，手里有 refresh_token 就能静默换新。
+                            // 2026-11-14 之前这里只有阿里有自动续期，迅雷失效就永远失效，
+                            // 用户只能手动重新登录（"迅雷账号在但不可用"的根因）。
+                            else if (kind == PanKind.Xunlei)
+                                TryAutoRenewXunleiCredential("校验未通过");
                         }
                     }
                     catch (Exception ex)
@@ -2079,6 +2167,41 @@ namespace GeZi
                 }), System.Windows.Threading.DispatcherPriority.Background);
             }
             catch { _emptyStatePending = false; }
+        }
+
+
+        // ---------------- 风控参谋：任务结束采集 ----------------
+        // 只观察、不主动探测：每次真实下载任务结束后记一笔「网盘 + 实际线程 + 峰值速度 +
+        // 是否停滞」，攒够 AdvisorEngine.MinSamples 条后卡片才给建议。数据全部来自任务
+        // 生命周期里已经发生的事实（OnDiagnostics 每 5 秒喂一次的 WorkerCount/Stalled），
+        // 不向服务器多发一个请求，零风控风险。
+
+        /// <summary>
+        /// 在任务终态帧调用一次，把 <paramref name="item"/> 的最终观测写进
+        /// <c>AdvisorStore</c>。刚点下载就取消/失败、根本没跑起来过的任务（
+        /// WorkerCount 与峰值速度都是 0）跳过，避免污染参谋。
+        /// </summary>
+        private void RecordAdvisorSample(TaskItem item, bool completed)
+        {
+            try
+            {
+                if (item == null || item.Job == null || item.Job.Pending == null) return;
+                // 没真正跑起来（没启动 worker、没产生速度）的样本没有参考价值。
+                if (item.WorkerCount <= 0 && item.PeakBps <= 0) return;
+
+                var sample = new AdvisorSample
+                {
+                    PanKind = item.Job.Pending.PanKind,
+                    Threads = item.WorkerCount,
+                    PeakBps = (long)item.PeakBps,
+                    Stalled = item.StalledOnce,
+                    Completed = completed,
+                    TimeTicks = DateTime.UtcNow.Ticks,
+                };
+                AdvisorStore.RecordSample(sample);
+                // 样本只是落盘，卡片/弹窗在用户点「查看」时才实时取，无需在此刷新。
+            }
+            catch { }
         }
     }
 }

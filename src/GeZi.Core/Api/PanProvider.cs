@@ -138,6 +138,46 @@ namespace GeZi.Core.Api
     }
 
     /// <summary>
+    /// 分享「是否还有效」的探测结论。
+    /// <para>
+    /// 三态而不是两态：<b>网络故障不等于分享失效</b>。
+    /// 把「连不上」当成「失效」会让用户以为链接被删了，白白重找一遍分享。
+    /// </para>
+    /// </summary>
+    public enum ShareProbeStatus
+    {
+        /// <summary>还没探过 / 探不出结论。</summary>
+        Unknown = 0,
+
+        /// <summary>链接还有效（能换到凭证、能列出目录）。</summary>
+        Alive = 1,
+
+        /// <summary>
+        /// 链接**确定**失效：服务端明确说了「链接无效 / 提取码错 / 已取消」。
+        /// </summary>
+        Invalid = 2,
+    }
+
+    /// <summary>一次分享探测的结果（状态 + 给界面看的一句话原因）。</summary>
+    public sealed class ShareProbeResult
+    {
+        public ShareProbeStatus Status { get; set; } = ShareProbeStatus.Unknown;
+
+        /// <summary>原因（失效时给用户看；网络故障时写「网络没通」之类）。</summary>
+        public string Reason { get; set; } = "";
+
+        public bool IsAlive
+        {
+            get { return Status == ShareProbeStatus.Alive; }
+        }
+
+        public bool IsInvalid
+        {
+            get { return Status == ShareProbeStatus.Invalid; }
+        }
+    }
+
+    /// <summary>
     /// 网盘能力的统一契约。
     /// <para>
     /// 设计原则：**只抽"取直链"这一条链路**，不碰下载引擎。
@@ -258,5 +298,26 @@ namespace GeZi.Core.Api
 
         /// <summary>查自己网盘的容量用量（账号卡片上的剩余空间）。</summary>
         Task<PanSpaceInfo> GetSpaceAsync(CancellationToken cancel = default);
+
+        /// <summary>
+        /// **轻量**探测一个分享还有没有效 —— 只换凭证，不列目录。
+        /// <para>
+        /// 🚨 为什么要单独一个方法（用户 2026-11-15 报「解析历史的失效检测根本不检测」）：
+        /// 原来的实现直接调 <see cref="ListShareAsync"/>，那是**列目录**，代价大；
+        /// 而失效检测要在一堆历史记录上轮着跑，代价必须小。
+        /// 换凭证这一步（各家的 stoken / share_token / pass_code_token）
+        /// 就能判断「链接还有效吗、提取码对不对」，一个 GET 就够。
+        /// </para>
+        /// <para>
+        /// 三态语义（见 <see cref="ShareProbeStatus"/>）：<b>网络故障必须单独返回</b>，
+        /// 绝不能当成「失效」—— 否则用户会以为链接被删了。
+        /// </para>
+        /// <para>
+        /// 实现约定：能确定失效时抛 <see cref="QuarkApiException"/>（消息里带上原因），
+        /// 其它异常一律当成「网络故障」，由上层兜成 <see cref="ShareProbeStatus.Unknown"/>。
+        /// </para>
+        /// </summary>
+        Task<ShareProbeResult> ProbeShareAsync(
+            PanShareRef shareRef, CancellationToken cancel = default);
     }
 }

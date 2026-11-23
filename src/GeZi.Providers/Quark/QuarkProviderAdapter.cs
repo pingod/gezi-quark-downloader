@@ -238,6 +238,69 @@ namespace GeZi.Providers.Quark
             return Task.FromResult(0);
         }
 
+        /// <summary>
+        /// 轻量探测分享是否还有效：**只换 stoken**，不列目录。
+        /// <para>
+        /// 夸克的 stoken 接口（<c>sharepage/token</c>）匿名即可访问，
+        /// 所以没登录也能探；服务端对「链接无效 / 提取码错」会直接报错，
+        /// 对应 <see cref="QuarkApiException"/> ⇒ 判定为确定失效。
+        /// </para>
+        /// </summary>
+        public async Task<ShareProbeResult> ProbeShareAsync(
+            PanShareRef shareRef, CancellationToken cancel = default)
+        {
+            if (shareRef == null || string.IsNullOrEmpty(shareRef.ShareId))
+                return new ShareProbeResult { Status = ShareProbeStatus.Unknown, Reason = "分享 ID 为空" };
+
+            try
+            {
+                string stoken = await _client.GetStokenAsync(shareRef.ShareId, shareRef.Passcode ?? "")
+                    .ConfigureAwait(false);
+                if (string.IsNullOrEmpty(stoken))
+                {
+                    return new ShareProbeResult
+                    {
+                        Status = ShareProbeStatus.Invalid,
+                        Reason = "链接已失效，或提取码不对",
+                    };
+                }
+                return new ShareProbeResult { Status = ShareProbeStatus.Alive };
+            }
+            catch (QuarkApiException ex)
+            {
+                // 服务端明确说了「链接无效 / 提取码错」这一类 ⇒ 确定失效。
+                return new ShareProbeResult
+                {
+                    Status = ShareProbeStatus.Invalid,
+                    Reason = DescribeProbeError(ex),
+                };
+            }
+            catch (Exception)
+            {
+                // 网络故障、TLS 失败等 —— **不能**当失效。
+                return new ShareProbeResult
+                {
+                    Status = ShareProbeStatus.Unknown,
+                    Reason = "网络没通，暂时判断不了",
+                };
+            }
+        }
+
+        /// <summary>把夸克接口的报错翻成一句人话。</summary>
+        private static string DescribeProbeError(QuarkApiException ex)
+        {
+            string msg = ex != null && ex.Message != null ? ex.Message : "";
+            if (msg.IndexOf("passcode", StringComparison.OrdinalIgnoreCase) >= 0
+                || msg.IndexOf("提取码", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("密码", StringComparison.Ordinal) >= 0)
+                return "提取码不对";
+            if (msg.IndexOf("失效", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("不存在", StringComparison.Ordinal) >= 0
+                || msg.IndexOf("invalid", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "链接已失效";
+            return "链接已失效或提取码不对";
+        }
+
         /// <summary>删除用户网盘里的文件（委托给内部的 QuarkClient）。</summary>
         public async Task DeleteFilesAsync(IList<string> fileIds, CancellationToken cancel = default(CancellationToken))
         {

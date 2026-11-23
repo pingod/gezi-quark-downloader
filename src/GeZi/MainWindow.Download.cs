@@ -225,9 +225,22 @@ namespace GeZi
                 e.DataObject = new DataObject(DataFormats.UnicodeText, url);
 
                 // 文案里带提取码时顺手填上（用户看得见"用了什么码"，解析失败时好排查）
+                // 🚨 2026-11-15：以前**只**用夸克/UC 的 ShareUrlParser 提取提取码，
+                //    迅雷/阿里链接里的 ?pwd=xxx（以及文案里的「提取码：xxxx」）压根抠不出来，
+                //    粘贴后框里是空的 → 解析报「该迅雷分享需要提取码」。
+                //    这里补上 PanUrlParser（它按四家域名认链接，提取码规则也更全）。
+                string pastedPasscode = "";
                 var info2 = ShareUrlParser.Parse(text);
-                if (!string.IsNullOrEmpty(info2.Passcode) && string.IsNullOrEmpty(PassBox.Text.Trim()))
-                    PassBox.Text = info2.Passcode;
+                if (!string.IsNullOrEmpty(info2.Passcode))
+                    pastedPasscode = info2.Passcode;
+                else
+                {
+                    var panInfo = PanUrlParser.Parse(text);
+                    if (panInfo != null && !string.IsNullOrEmpty(panInfo.Passcode))
+                        pastedPasscode = panInfo.Passcode;
+                }
+                if (!string.IsNullOrEmpty(pastedPasscode) && string.IsNullOrEmpty(PassBox.Text.Trim()))
+                    PassBox.Text = pastedPasscode;
             }
             catch { /* 粘贴绝不因为这里出错而失败 */ }
         }
@@ -817,7 +830,7 @@ namespace GeZi
         private void ExportLinksFromDialog(Window owner, List<DownloadItem> items,
             LinkExporter.Format format)
         {
-            if (!IsLoggedInAny && _panProvider == null) { Log("请先登录或解析分享"); return; }
+            if (!IsLoggedInAny && _panProvider == null) { NoticeNeedLogin("导出直链需要先登录或解析分享，已切到登录页"); return; }
 
             var list = new List<LinkExporter.Item>();
             int skipped = 0;
@@ -1057,6 +1070,9 @@ namespace GeZi
                     SlowFloorBps = SlowFloorFor(srcKind),
                     // 2026-11-05：下载数据面按网盘补齐客户端头，与取链身份一致。
                     PanKind = (int)srcKind,
+                    // 🚨 2026-11-14：快速校验开关（设置页「严格校验」默认关）。
+                    //   true = 全量哈希/抽样；false = 只做分片覆盖+长度，收尾毫秒级。
+                    StrictVerify = _settings.StrictVerify,
                     ExtraHeaders = DownloadExtraHeadersFor(srcKind),
                     Threads = i < alloc.Length ? alloc[i] : ThreadsFor(srcKind),
                     Md5 = item.Md5, Sha1 = item.Sha1, Sha256 = item.Sha256,
@@ -1083,6 +1099,9 @@ namespace GeZi
                         StartFid = item.StartFid, ShareRelDir = item.ShareRelDir,
                         // 来源网盘（0=夸克）：续传时要据此选客户端
                         PanKind = (int)srcKind,
+                        // 🚨 2026-11-14：同时记下"哪个账号"。只有网盘的 kind 不够 ——
+                        //   换成同一家网盘的另一个账号去续传时，会拿新账号的凭证取旧账号的文件。
+                        AccountTag = ComputeAccountTag((int)srcKind),
                     },
                 });
                 // 终态要靠 dest 反查这个条目，才能删掉取链时转存的临时副本。
@@ -1726,6 +1745,8 @@ namespace GeZi
                     SlowFloorBps = SlowFloorFor(srcKind),
                     // 2026-11-05：下载数据面按网盘补齐客户端头，与取链身份一致。
                     PanKind = (int)srcKind,
+                    // 🚨 2026-11-14：快速校验开关（设置页「严格校验」默认关）。
+                    StrictVerify = _settings.StrictVerify,
                     ExtraHeaders = DownloadExtraHeadersFor(srcKind),
                     Threads = i < alloc.Length ? alloc[i] : ThreadsFor(srcKind),
                     Md5 = item.Md5, Sha1 = item.Sha1, Sha256 = item.Sha256,
@@ -1751,6 +1772,8 @@ namespace GeZi
                         // 自动重解析分享的上下文（stoken 过期时换新凭证用）
                         StartFid = item.StartFid, ShareRelDir = item.ShareRelDir,
                         PanKind = (int)srcKind,
+                        // 🚨 2026-11-14：同第一处 —— 记下账号指纹，避免换账号后续传串号。
+                        AccountTag = ComputeAccountTag((int)srcKind),
                         // 🚨 2026-11-03：同第一处 —— 链接与转存 fid 都要落进续传记录。
                         ShareUrl = item.ShareUrl ?? _shareUrl,
                         SavedFid = item.SavedFid,

@@ -142,6 +142,10 @@ namespace GeZi.SelfTest
     Run("bandwidth_smoothing", TestBandwidthSmoothing);
     Run("log_redactor", TestLogRedactor);
         Run("pending_canresume", TestPendingCanResume);
+        Run("retry_policy", TestRetryPolicy);
+        Run("verify_multi_algorithm", TestVerifyMultiAlgorithm);
+        Run("advisor_engine", TestAdvisorEngine);
+        Run("update_asset", TestUpdateAsset);
             }
             catch (Exception ex)
             {
@@ -842,7 +846,7 @@ namespace GeZi.SelfTest
                 return new MockHttpServer.MockResponse("{\"error\":\"unexpected\"}");
             }))
             {
-                using (var xl = new XunleiClient("PANTOK", "CAPTOK", server.BaseUrl))
+                using (var xl = new XunleiClient("PANTOK", "CAPTOK", server.BaseUrl, "DEV1"))
                 {
                     var shareRef = new PanShareRef
                     {
@@ -1754,6 +1758,180 @@ namespace GeZi.SelfTest
         }
 
 
+        /// <summary>
+        /// 🚨 2026-11-14：失败重试判据（用户硬要求「任何文件都不可以轻易说失败」）。
+        /// <para>
+        /// 这三条判据是整个「失败永不判死」链条的第一道闸：
+        /// 网络断了必须重试、磁盘满了绝不能重试、校验不符绝不能重试。
+        /// </para>
+        /// </summary>
+        private static void TestRetryPolicy()
+        {
+            // ============ 传输层断开 vs 磁盘类错误 ============
+            // 这是真机 issue #18 的原始文案：ConnectStream 读响应体失败抛的 IOException
+            var connClosed = new System.IO.IOException(
+                "无法从传输连接中读取数据: 连接已关闭。");
+            Check("retry.connection_closed_is_transport",
+                GeZi.Core.Support.RetryPolicy.IsTransportIo(connClosed),
+                "「无法从传输连接中读取数据: 连接已关闭」必须判为网络断开（不能当成写盘失败）");
+
+            var forcedClosed = new System.IO.IOException(
+                "远程主机强迫关闭了一个现有的连接。");
+            Check("retry.forced_close_is_transport",
+                GeZi.Core.Support.RetryPolicy.IsTransportIo(forcedClosed),
+                "「远程主机强迫关闭」必须判为网络断开");
+
+            // 内层带 SocketException 的，无论外层是什么都要认得出来
+            var wrapped = new System.IO.IOException("读取失败",
+                new System.Net.Sockets.SocketException(10054));
+            Check("retry.socket_inner_is_transport",
+                GeZi.Core.Support.RetryPolicy.IsTransportIo(wrapped),
+                "内层 SocketException 必须判为网络断开");
+
+            // 🚨 关键反向断言：磁盘类异常绝不能判成网络，否则会无限重试
+            Check("retry.disk_full_not_transport",
+                !GeZi.Core.Support.RetryPolicy.IsTransportIo(
+                    new System.IO.IOException("磁盘空间不足。")),
+                "磁盘空间不足必须判为磁盘问题（不能当成网络重试）");
+            Check("retry.access_denied_not_transport",
+                !GeZi.Core.Support.RetryPolicy.IsTransportIo(
+                    new UnauthorizedAccessException("对路径的访问被拒绝。")),
+                "拒绝访问必须判为权限问题");
+            Check("retry.null_not_transport",
+                !GeZi.Core.Support.RetryPolicy.IsTransportIo(null),
+                "null 不能判成网络异常");
+
+            // 🚨 2026-11-15：.NET Framework 中文版 ConnectStream 的原文是
+            // 「从传输流收到意外的 EOF」—— 英文原版才是 "unexpectedly"，
+            // 之前只认英文 ⇒ 这类断开被套上「写盘失败：」前缀并直接判死任务。
+            var unexpectedEof = new System.IO.IOException(
+                "从传输流收到意外的 EOF。");
+            Check("retry.unexpected_eof_is_transport",
+                GeZi.Core.Support.RetryPolicy.IsTransportIo(unexpectedEof),
+                "「从传输流收到意外的 EOF」必须判为网络断开（不能当成写盘失败）");
+            Check("retry.eof_message_retryable",
+                GeZi.Core.Support.RetryPolicy.IsRetryableFailure(
+                    "下载中断：网络连接被服务端或中间设备断开（从传输流收到意外的 EOF。）。已下载部分会保留，可直接重试续传。"),
+                "提前 EOF 归因成网络断开后必须可重试");
+
+            // ============ 值不值得重试 ============
+            Check("retry.empty_message_retryable",
+                GeZi.Core.Support.RetryPolicy.IsRetryableFailure(""),
+                "没给原因时按可重试处理（保守）");
+            Check("retry.connection_message_retryable",
+                GeZi.Core.Support.RetryPolicy.IsRetryableFailure(
+                    "下载中断：网络连接被服务端或中间设备断开（…）。已下载部分会保留，可直接重试续传。"),
+                "网络断开必须可重试");
+            Check("retry.timeout_message_retryable",
+                GeZi.Core.Support.RetryPolicy.IsRetryableFailure("等待响应超时，请稍后重试。"),
+                "超时必须可重试");
+
+            // 🚨 这些重试纯属浪费用户时间
+            Check("retry.hash_mismatch_not_retryable",
+                !GeZi.Core.Support.RetryPolicy.IsRetryableFailure(
+                    "内容校验失败：MD5 不一致（期望 a，实际 b）"),
+                "内容不一致绝不能自动重试");
+            Check("retry.disk_full_not_retryable",
+                !GeZi.Core.Support.RetryPolicy.IsRetryableFailure("写盘失败：磁盘空间不足。"),
+                "磁盘空间不足绝不能自动重试");
+            Check("retry.access_denied_not_retryable",
+                !GeZi.Core.Support.RetryPolicy.IsRetryableFailure("写盘失败：拒绝访问。"),
+                "拒绝访问绝不能自动重试");
+            Check("retry.not_exists_not_retryable",
+                !GeZi.Core.Support.RetryPolicy.IsRetryableFailure("该文件在网盘上已不存在。"),
+                "文件已被删绝不能自动重试");
+            Check("retry.cancelled_not_retryable",
+                !GeZi.Core.Support.RetryPolicy.IsRetryableFailure("已取消一个任务。"),
+                "主动取消绝不能自动重试");
+        }
+
+
+        /// <summary>
+        /// 🚨 2026-11-14：多算法全试。
+        /// <para>
+        /// 夸克同时返回 md5/sha1/sha256，而它的 md5 常错（2026-10-24 全量比对坐实）。
+        /// 原来只试第一个非空算法 ⇒ 拿错误的 md5 比对 ⇒ 每个夸克文件都报「不一致」。
+        /// 现在必须「任一算法对上就算通过」。
+        /// </para>
+        /// </summary>
+        private static void TestVerifyMultiAlgorithm()
+        {
+            // 造一个临时文件，内容是确定的字节序列
+            // ⚠️ 用「自检程序自己所在目录」而不是 Path.GetTempPath()：
+            //    某些环境下（沙盒/受限账户）AppData\Local\Temp 会被拒绝访问，
+            //    自检不该因为挑临时目录而失败。
+            string path = System.IO.Path.Combine(
+                AppDomain.CurrentDomain.BaseDirectory,
+                "gezi_self_verify_" + Guid.NewGuid().ToString("N") + ".bin");
+            try
+            {
+                byte[] data = new byte[4096];
+                for (int i = 0; i < data.Length; i++) data[i] = (byte)(i % 251);
+                System.IO.File.WriteAllBytes(path, data);
+
+                string realMd5, realSha1, realSha256;
+                using (var md5 = System.Security.Cryptography.MD5.Create())
+                    realMd5 = BitConverter.ToString(md5.ComputeHash(data)).Replace("-", "").ToLowerInvariant();
+                using (var sha1 = System.Security.Cryptography.SHA1.Create())
+                    realSha1 = BitConverter.ToString(sha1.ComputeHash(data)).Replace("-", "").ToLowerInvariant();
+                using (var sha256 = System.Security.Cryptography.SHA256.Create())
+                    realSha256 = BitConverter.ToString(sha256.ComputeHash(data)).Replace("-", "").ToLowerInvariant();
+
+                var validator = GeZi.DownloadEngine.Validation.IfRangeValidator.Instance;
+
+                // 1) 只有 md5 且正确 → 通过
+                var onlyMd5 = validator.VerifyAsync(path, new GeZi.DownloadEngine.Validation.HashExpectation
+                {
+                    Md5 = realMd5,
+                }, System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+                Check("verify.md5_only_pass", onlyMd5.Ok && !onlyMd5.HashMismatch,
+                    "单 md5 正确必须通过");
+
+                // 2) 🚨 核心：md5 是错的（模拟夸克），但 sha1 是对的 → 必须通过
+                var wrongMd5RightSha1 = validator.VerifyAsync(path, new GeZi.DownloadEngine.Validation.HashExpectation
+                {
+                    Md5 = "00000000000000000000000000000000",
+                    Sha1 = realSha1,
+                }, System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+                Check("verify.wrong_md5_right_sha1_pass",
+                    wrongMd5RightSha1.Ok && !wrongMd5RightSha1.HashMismatch,
+                    "md5 错但 sha1 对时必须判为通过（夸克就是这个情况）");
+
+                // 3) 三算法全给且都对 → 通过
+                var allRight = validator.VerifyAsync(path, new GeZi.DownloadEngine.Validation.HashExpectation
+                {
+                    Md5 = realMd5,
+                    Sha1 = realSha1,
+                    Sha256 = realSha256,
+                }, System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+                Check("verify.all_algorithms_pass", allRight.Ok && !allRight.HashMismatch,
+                    "三算法全对必须通过");
+
+                // 4) 三算法全错 → 必须报不一致（绝不能放行）
+                var allWrong = validator.VerifyAsync(path, new GeZi.DownloadEngine.Validation.HashExpectation
+                {
+                    Md5 = "11111111111111111111111111111111",
+                    Sha1 = "2222222222222222222222222222222222222222",
+                    Sha256 = "3333333333333333333333333333333333333333333333333333333333333333",
+                }, System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+                Check("verify.all_wrong_mismatch",
+                    allWrong.Ok && allWrong.HashMismatch,
+                    "三算法全错必须报不一致（HashMismatch=true 交给上层抽样复核）");
+
+                // 5) 一个哈希都没给 → Skip，不能当成失败
+                var none = validator.VerifyAsync(path, new GeZi.DownloadEngine.Validation.HashExpectation
+                {
+                }, System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+                Check("verify.no_hash_skip", none.Ok && none.Skipped,
+                    "没有哈希时必须 Skip（不是失败）");
+            }
+            finally
+            {
+                try { if (System.IO.File.Exists(path)) System.IO.File.Delete(path); } catch { }
+            }
+        }
+
+
         private static void TestResumeGaps()
         {
             // 构造一份「每片 1MiB、共 4MiB」的表，中间挖一个 512KiB 的洞
@@ -2039,6 +2217,89 @@ namespace GeZi.SelfTest
             Check("sizing.tail_bad_input",
                 GeZi.Core.Support.DownloadSizing.TailShrink(0, 16, baseSlice, min) == 0,
                 "非法剩余量返回 0（调用方保持原值）");
+
+            // 🚨 2026-11-14：末段切片的下限从 256KB 降到 64KB 后，必须钉死三件事，
+            // 否则将来有人"调参"把下限抬回去，尾部就又会只剩「剩余片数 × 单连接速度」。
+            const long tailMin = 64L * 1024;
+
+            // ① 66MB 末段 / 1024 并发：必须能切成 ≥1024 份，否则 1024 个 worker 大半空转。
+            //    现状（下限 256KB）只能切 264 份 —— 这正是「卡 99%」的算术根因。
+            long remain66 = 66L * 1024 * 1024;
+            long slice66 = GeZi.Core.Support.DownloadSizing.TailShrink(
+                remain66, 1024, GeZi.Core.Support.DownloadSizing.MaxSliceBytes, tailMin);
+            long parts66 = slice66 > 0 ? remain66 / slice66 : 0;
+            Check("tailslice.fill_all_workers", parts66 >= 1024,
+                "66MB 末段 / 1024 并发至少要能切成 1024 份，实得 " + parts66 + " 份（片长 " + slice66 + "）");
+
+            // ② 同样场景下若是老下限 256KB，只能切 264 份 —— 用断言把"回归"挡住。
+            long sliceOld = 256L * 1024;
+            long partsOld = remain66 / sliceOld;
+            Check("tailslice.old_floor_starves", partsOld < 1024,
+                "老下限 256KB 只能切 " + partsOld + " 份（<1024），证明这就是卡 99% 的算术原因");
+
+            // ③ 1.1GB 散在多个大片上时**不能**被切碎：片长必须远大于 64KB，
+            //    否则会变成上万次 Range 请求 + TLS 握手（OpenSSL 数据面无连接池）。
+            long sliceBig = GeZi.Core.Support.DownloadSizing.TailShrink(
+                1100L * 1024 * 1024, 1024, GeZi.Core.Support.DownloadSizing.MaxSliceBytes, tailMin);
+            Check("tailslice.never_shred_when_plenty", sliceBig > tailMin * 4,
+                "剩余充足时片长应明显大于下限，实=" + sliceBig);
+
+            // ④ 下限本身必须允许 64KB（DownloadConfiguration 的 setter 硬下限也是 64KB）。
+            Check("tailslice.min_floor_is_64k", tailMin == 65536,
+                "末段片长下限必须是 64KB（对齐 refs/YunX 的 MIN_TAIL_BLOCK）");
+
+            // ⑤ 默认值必须就是 64KB —— 2026-11-08 的 9846055 已经把它改对过一次，
+            //    但 FusionDownloader 那行老值（256KB）把它整个覆盖掉，导致那次修复
+            //    线上从未生效。这条断言钉死"默认值"，防止再次被上层悄悄改回。
+            var cfgDefault = new GeZi.DownloadEngine.Framework.DownloadConfiguration();
+            Check("tailslice.config_default_64k", cfgDefault.TailRefillMinBytes == 64 * 1024,
+                "DownloadConfiguration 默认 TailRefillMinBytes 必须是 64KB，实=" + cfgDefault.TailRefillMinBytes);
+
+            // ⑥ setter 的下限保护：任何更小的注入都要被抬回 64KB（防止 0 / 负数）。
+            var cfgClamp = new GeZi.DownloadEngine.Framework.DownloadConfiguration();
+            cfgClamp.TailRefillMinBytes = 1;
+            Check("tailslice.config_setter_clamps", cfgClamp.TailRefillMinBytes == 64 * 1024,
+                "小于 64KB 的注入必须被抬回 64KB，实=" + cfgClamp.TailRefillMinBytes);
+
+            // 🚨 2026-11-14：收尾校验的两处改动的护栏。
+            //
+            // ⑦ 哈希可信判定：只有夸克(0) 的 md5 与真实内容不符，必须跳过全量哈希。
+            //    对它跑全量 SHA-256 的结论恒为「元数据不可信、文件可用」，
+            //    代价是把整个文件顺序读一遍（22GB ⇒ 110~220 秒，用户体感「卡在 99%」）。
+            Check("trusted_hash.quark_skip",
+                !GeZi.Core.Support.DownloadSizing.TrustsExpectedHash(0),
+                "夸克(0) 的哈希元数据不可信，必须跳过全量哈希");
+
+            // ⑧ 其余三家 + 未知值都必须「信任」（原行为不变，默认等价）。
+            //
+            // 🚨 2026-11-14 实测修正：UC(1) 曾经被划进跳过名单，理由只是「和夸克同协议族」——
+            //    但记忆里那份全量比对证据（api md5 1c7741… vs local md5 745515…）是**夸克**的，
+            //    UC 从来没过做同等实测；反而日志里出现过「内容校验：MD5 校验通过」。
+            //    拿推断当事实违背 AGENTS.md 一·6 / 一·8，故 UC 恢复信任。
+            Check("trusted_hash.others_keep",
+                GeZi.Core.Support.DownloadSizing.TrustsExpectedHash(1)
+                && GeZi.Core.Support.DownloadSizing.TrustsExpectedHash(2)
+                && GeZi.Core.Support.DownloadSizing.TrustsExpectedHash(3)
+                && GeZi.Core.Support.DownloadSizing.TrustsExpectedHash(-1)
+                && GeZi.Core.Support.DownloadSizing.TrustsExpectedHash(99),
+                "UC(1) / 阿里(2) / 迅雷(3) / 未知值必须保持信任，否则会漏掉真正的损坏");
+
+            // ⑨ 内存写缓冲必须有限：以前是 0（=不限）⇒ 写盘跟不上时队列无限增长。
+            Check("membuffer.hdd_bounded",
+                GeZi.Core.Support.DownloadSizing.MemoryBufferBytes(true) == 512L * 1024 * 1024,
+                "机械盘内存缓冲上限必须是 512MB，实="
+                + GeZi.Core.Support.DownloadSizing.MemoryBufferBytes(true));
+
+            // ⑩ 固态盘上限 256MB；且两者都必须远小于「不限」（long.MaxValue）。
+            long ssdBuf = GeZi.Core.Support.DownloadSizing.MemoryBufferBytes(false);
+            Check("membuffer.ssd_bounded",
+                ssdBuf == 256L * 1024 * 1024 && ssdBuf < long.MaxValue / 2,
+                "固态盘内存缓冲上限必须是 256MB 且有限，实=" + ssdBuf);
+
+            // ⑪ 机械盘缓冲必须 ≥ 固态盘（写得更慢，需要更多空间吸收突发）。
+            Check("membuffer.hdd_ge_ssd",
+                GeZi.Core.Support.DownloadSizing.MemoryBufferBytes(true) >= ssdBuf,
+                "机械盘缓冲必须不小于固态盘");
         }
 
 
@@ -3588,11 +3849,150 @@ namespace GeZi.SelfTest
                 "同一秒内 50 条连接全回 200 必须被识别为真降级");
         }
 
+        private static void TestAdvisorEngine()
+        {
+            long now = DateTime.UtcNow.Ticks;
+            long day = TimeSpan.TicksPerDay;
+
+            // ① 样本不足（< MinSamples=3）→ Ready=false，其余字段全 0。
+            var few = new List<AdvisorSample>
+            {
+                S(0, 64, 10_000_000, false, true, now),
+                S(0, 96, 15_000_000, false, true, now),
+            };
+            var vFew = AdvisorEngine.Advise(few, now);
+            Check("advisor.insufficient_not_ready", !vFew.Ready && vFew.SampleCount == 2,
+                "2 条样本不应参谋，Ready 应 false，实际 SampleCount=" + vFew.SampleCount);
+            Check("advisor.insufficient_zero_suggestion",
+                vFew.SuggestMax == 0 && vFew.SuggestMin == 0 && vFew.RedLine == 0,
+                "样本不足时建议与红线都应归零");
+
+            // ② 红线 = 出现停滞的最小并发档；推荐 = 无停滞且完成里峰值最高档。
+            var basic = new List<AdvisorSample>
+            {
+                S(0, 64,  20_000_000, false, true,  now),
+                S(0, 96,  15_000_000, false, true,  now),
+                S(0, 128, 30_000_000, true,  false, now),
+            };
+            var vBasic = AdvisorEngine.Advise(basic, now);
+            Check("advisor.redline_min_stalled", vBasic.RedLine == 128,
+                "128 档停滞，红线应为 128，实际=" + vBasic.RedLine);
+            Check("advisor.suggest_highest_peak", vBasic.SuggestMax == 64,
+                "安全完成档里峰值最高是 64(20MB)，实际建议=" + vBasic.SuggestMax);
+            Check("advisor.suggest_min_floor", vBasic.SuggestMin == Math.Max(AdvisorEngine.FloorThreads, 64 / 2),
+                "建议下限应为 max(16, 32)=32，实际=" + vBasic.SuggestMin);
+
+            // ③ 无停滞时，推荐 = 峰值最高的完成档（96 档 20MB 最高）。
+            var clean = new List<AdvisorSample>
+            {
+                S(0, 64,  10_000_000, false, true, now),
+                S(0, 96,  20_000_000, false, true, now),
+                S(0, 128, 15_000_000, false, true, now),
+            };
+            var vClean = AdvisorEngine.Advise(clean, now);
+            Check("advisor.no_stall_highest_peak", vClean.SuggestMax == 96 && vClean.RedLine == 0,
+                "无停滞时建议应为峰值最高档 96，红线 0，实际建议=" + vClean.SuggestMax + " 红线=" + vClean.RedLine);
+
+            // ④ 推荐档触碰/越过红线 → 压到红线之下。
+            var clamp = new List<AdvisorSample>
+            {
+                S(0, 64,  10_000_000, false, true,  now),
+                S(0, 128, 20_000_000, true,  false, now),
+                S(0, 256, 50_000_000, false, true,  now),
+            };
+            var vClamp = AdvisorEngine.Advise(clamp, now);
+            Check("advisor.clamp_below_redline", vClamp.RedLine == 128 && vClamp.SuggestMax == 64,
+                "256 档峰值最高但触碰红线 128，应压到 64，实际建议=" + vClamp.SuggestMax + " 红线=" + vClamp.RedLine);
+
+            // ⑤ 全停滞（无安全样本）→ 建议降到红线一半以下。
+            var allStalled = new List<AdvisorSample>
+            {
+                S(0, 128, 20_000_000, true, false, now),
+                S(0, 256, 25_000_000, true, false, now),
+                S(0, 512, 30_000_000, true, false, now),
+            };
+            var vAll = AdvisorEngine.Advise(allStalled, now);
+            Check("advisor.all_stalled_fallback", vAll.RedLine == 128 && vAll.SuggestMax == Math.Max(AdvisorEngine.FloorThreads, 128 / 2),
+                "全停滞时红线=128，建议应=max(16,64)=64，实际=" + vAll.SuggestMax);
+
+            // ⑥ 保质期：超过 MaxDays 的样本在 AdviseFor 里被丢弃。
+            var expired = new List<AdvisorSample>
+            {
+                S(0, 64, 50_000_000, false, true, now - 40L * day),
+                S(0, 64, 10_000_000, false, true, now),
+                S(0, 64, 12_000_000, false, true, now),
+            };
+            var vExpired = AdvisorEngine.AdviseFor(expired, 0, now);
+            Check("advisor.expired_dropped", vExpired.SampleCount == 2 && !vExpired.Ready,
+                "40 天前的样本应被丢弃，剩 2 条不足 3，实际 SampleCount=" + vExpired.SampleCount);
+
+            // ⑦ AdviseFor 按网盘过滤：别家网盘的停滞不应影响本家红线。
+            var mixed = new List<AdvisorSample>
+            {
+                S(0, 64,  10_000_000, false, true, now),
+                S(0, 96,  15_000_000, false, true, now),
+                S(0, 128, 20_000_000, false, true, now),
+                S(1, 512, 99_000_000, true,  false, now),
+            };
+            var vMixed = AdvisorEngine.AdviseFor(mixed, 0, now);
+            Check("advisor.filter_by_pan", vMixed.SampleCount == 3 && vMixed.Ready,
+                "只应统计夸克(0)的 3 条，实际 SampleCount=" + vMixed.SampleCount);
+            Check("advisor.filter_ignores_other_pan", vMixed.RedLine == 0,
+                "UC(1) 的停滞不应进入夸克红线，实际红线=" + vMixed.RedLine);
+        }
+
+        private static AdvisorSample S(int panKind, int threads, long peakBps, bool stalled, bool completed, long ticks)
+        {
+            return new AdvisorSample
+            {
+                PanKind = panKind,
+                Threads = threads,
+                PeakBps = peakBps,
+                Stalled = stalled,
+                Completed = completed,
+                TimeTicks = ticks,
+            };
+        }
+
         private static string Short(string s, int max = 12)
         {
             if (string.IsNullOrEmpty(s))
                 return "-";
             return s.Length <= max ? s : s.Substring(0, max) + "…";
         }
+
+        /// <summary>
+        /// 更新包附件名的识别规则（2026-11-15）。
+        /// 起因：检查器原来只认 "-win64.zip"，而打包脚本生成的是 "-win-x64.zip"
+        /// ⇒ 一个都匹配不上 ⇒ 永远找不到安装包、也没有直链可下载。
+        /// </summary>
+        private static void TestUpdateAsset()
+        {
+            // 当前打包脚本真正生成的名字（tools/package_release.py）
+            Check("update_asset.win_x64", UpdateAsset.IsWindowsPackage("GeZi-v2.4.3-win-x64.zip"));
+            // 旧命名也要认
+            Check("update_asset.win64", UpdateAsset.IsWindowsPackage("GeZi-v2.4.0-win64.zip"));
+            // 校验文件不是安装包
+            Check("update_asset.not_sha", !UpdateAsset.IsWindowsPackage("GeZi-v2.4.3-win-x64.zip.sha256"));
+            // 前缀不对
+            Check("update_asset.bad_prefix", !UpdateAsset.IsWindowsPackage("Other-v1.0.0-win-x64.zip"));
+            // 空值
+            Check("update_asset.empty", !UpdateAsset.IsWindowsPackage(null));
+            Check("update_asset.empty_str", !UpdateAsset.IsWindowsPackage(""));
+            // 大小写不敏感
+            Check("update_asset.case", UpdateAsset.IsWindowsPackage("gezi-v2.4.3-WIN-X64.ZIP"));
+            // 从列表里挑：跳过 sha256，命中安装包
+            var picked = UpdateAsset.PickPackageName(new[]
+            {
+                "GeZi-v2.4.3-win-x64.zip.sha256",
+                "GeZi-v2.4.3-win-x64.zip",
+            });
+            Check("update_asset.pick", picked == "GeZi-v2.4.3-win-x64.zip", "picked=" + picked);
+            // 挑不到返回 null（调用方据此隐藏「直接下载」按钮）
+            Check("update_asset.pick_null",
+                UpdateAsset.PickPackageName(new[] { "GeZi-v2.4.3-win-x64.zip.sha256" }) == null);
+            Check("update_asset.pick_null_list", UpdateAsset.PickPackageName(null) == null);
+        }
     }
+
 }

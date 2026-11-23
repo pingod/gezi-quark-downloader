@@ -160,7 +160,10 @@ namespace GeZi
             {
                 if (!IsLoggedInAny)
                 {
-                    Log("网盘模式需要先登录");
+                    // 2026-11-14：原来只往日志写一行「网盘模式需要先登录」，
+                    // 界面毫无反应（日志在下方不起眼），用户以为程序坏了。
+                    // 改成弹框提示 + 引导去登录页（复用下载入口那套 RequireLogin）。
+                    RequireLogin("浏览我的网盘");
                     return;
                 }
                 await LoadDirAsync("0");
@@ -307,12 +310,17 @@ namespace GeZi
         }
 
         /// <summary>解析分享的实际流程（闸门已在 <see cref="OnParseClick"/> 里）。</summary>
-        private async Task ParseShareCoreAsync()
+        /// <param name="alreadyBusy">
+        /// 调用方已经把这个按钮切成忙态时传 true（口令解析那条路会先 busy 再回头调这里），
+        /// 这样按钮不会因为"重复 BeginBusy"被拒而白跑一次。
+        /// </param>
+        private async Task ParseShareCoreAsync(bool alreadyBusy = false)
         {
             string url = LinkBox.Text.Trim();
             if (string.IsNullOrEmpty(url))
             {
                 Log("请先粘贴分享链接");
+                NoticeParse("请输入分享链接或口令");
                 return;
             }
 
@@ -337,7 +345,7 @@ namespace GeZi
                 && otherPan.Kind != PanKind.Quark
                 && otherPan.Kind != PanKind.Uc)
             {
-                await ParseOtherPanAsync(otherPan).ConfigureAwait(true);
+                await ParseOtherPanAsync(otherPan, alreadyBusy).ConfigureAwait(true);
                 return;
             }
 
@@ -354,17 +362,20 @@ namespace GeZi
             var info = ShareUrlParser.Parse(url);
             if (info.IsKouling)
             {
-                // 夸克口令（形如 /~469d3M9zTu~:/）**不是**分享链接，也没有公开的
-                // 「口令 → 链接」接口（查过官方开放平台与非官方 API 文档，分享相关
-                // 接口只接受 pwd_id）。所以这里不装作能解析，直接给出可操作的指引。
-                Log("这是夸克口令（/~" + info.Kouling + "~:/），不是分享链接，无法直接解析。");
-                AppDialog.Show(this, KoulingText(info.Kouling),
-                    "这是夸克口令", MessageBoxButton.OK, MessageBoxImage.Information);
+                // 夸克口令（形如 /~469d3M9zTu~:/）不是分享链接，但**可以**通过口令解析服务
+                // 换成真链接。以前这里是弹个框说「无法解析」就完事 ——
+                // 用户看到的是「程序把我输入的话当空气了」，这正是要改掉的地方。
+                Log("识别到夸克口令（/~" + info.Kouling + "~:/），正在换成分享链接…");
+                await ParseShareCommandAsync(url).ConfigureAwait(true);
                 return;
             }
             if (string.IsNullOrEmpty(info.PwdId))
             {
-                Log("无法从链接解析出分享 ID");
+                // 既不是四家网盘的链接，也没有 /s/xxx 形态的分享 ID。
+                // 那就可能是**口令**（中文口令 / 含提取码的分享文案 / 短码），
+                // 交给口令解析；真不是口令就提示「请输入链接和口令」。
+                Log("没能从输入里认出分享 ID，按口令处理。");
+                await ParseShareCommandAsync(url).ConfigureAwait(true);
                 return;
             }
             string passcode = string.IsNullOrEmpty(PassBox.Text.Trim()) ? info.Passcode : PassBox.Text.Trim();
@@ -410,7 +421,11 @@ namespace GeZi
 
             // 解析要发两次网络请求（换 stoken + 拉目录），期间必须让用户看到"在忙"
             long t0 = BusyClock();
-            if (!BeginBusy(ParseBtn, "解析中")) return;
+            // ⚠️ alreadyBusy=true 时**不能**再 BeginBusy —— BeginBusy 见到按钮已在忙态
+            //    会直接返回 false，这里 return 就等于"口令解析成功了但什么也没发生"。
+            //    所以外层已经切过忙态时，这里只借 SetBusy 维持全局忙态、不动按钮。
+            bool ownsBusy = !alreadyBusy;
+            if (ownsBusy && !BeginBusy(ParseBtn, "解析中")) return;
             SetBusy(true);
             try
             {
@@ -418,6 +433,10 @@ namespace GeZi
                 if (string.IsNullOrEmpty(_stoken))
                 {
                     Log("获取分享凭证失败（可能需登录或提取码错误）");
+                    // 链接/口令解析不出来，界面上一律给这一句 —— 不再让用户面对
+                    // 「到底是链接坏了、码错了，还是没登录」这种分不清的情况。
+                    NoticeParse("链接已失效或网络故障");
+                    NoticeNeedLogin("获取分享凭证失败，可能需要登录或提取码不对", false);
                     NotifyIfHidden("自动解析失败",
                         "获取分享凭证失败，可能需要登录，或分享提取码不正确。");
                     return;
@@ -430,6 +449,18 @@ namespace GeZi
                     + "（多选用 Shift / Ctrl+点击，或右键该行）。");
                 // 记入解析历史（原文案是「单击进入」，我们保留双击版）
                 RecordShareHistory(info.PwdId, passcode, info.StartFid);
+                // 从收藏夹点进来的（收藏的是分享里的某个文件）→ 进目录后自动定位到那个文件
+                TryDrillToFavoriteTarget();
+                if (_files.Count == 0)
+                {
+                    // 分享能打开、但当前目录一个文件都没有 —— 用户看到的还是"没东西"。
+                    // 提示要区分两种情况：目录真的是空的 vs 链接其实已经失效。
+                    NoticeParse("链接已失效或网络故障");
+                }
+                else
+                {
+                    NoticeParse("解析成功，共 " + _files.Count + " 个文件");
+                }
                 NotifyIfHidden("已解析剪贴板里的分享链接",
                     _files.Count > 0
                         ? "共 " + _files.Count + " 个文件。双击托盘图标打开窗口即可下载。"
@@ -438,12 +469,16 @@ namespace GeZi
             catch (Exception ex)
             {
                 Log("解析失败: " + ex.Message);
+                NoticeParse("链接已失效或网络故障");
                 NotifyIfHidden("自动解析失败", ex.Message);
             }
             finally
             {
                 SetBusy(false);
-                await EndBusyAsync(ParseBtn, t0);
+                // 只还原"自己开的"忙态：alreadyBusy 时按钮是外层（口令解析那条路）开的，
+                // 由外层 EndBusyAsync 还原，否则会把外层的转圈提前撤掉。
+                if (ownsBusy)
+                    await EndBusyAsync(ParseBtn, t0);
             }
         }
 
@@ -455,7 +490,11 @@ namespace GeZi
         /// 所以"未登录"时必须给出**去哪拿凭证**的指引，而不是一句"解析失败"。
         /// </para>
         /// </summary>
-        private async Task ParseOtherPanAsync(PanShareRef shareRef)
+        /// <param name="alreadyBusy">
+        /// 调用方已经把这个按钮切成忙态时传 true（口令解析那条路会先 busy 再回头调这里），
+        /// 否则 <see cref="BeginBusy"/> 会因"已在忙 → 拒绝重入"直接返回，等于什么都没干。
+        /// </param>
+        private async Task ParseOtherPanAsync(PanShareRef shareRef, bool alreadyBusy = false)
         {
             string panName = PanUrlParser.DisplayNameOf(shareRef.Kind);
 
@@ -487,12 +526,7 @@ namespace GeZi
 
                 string hint = PanProviderRegistry.CredentialHint(shareRef.Kind);
                 Log(panName + "尚未配置登录凭证（需要：" + hint + "）。");
-                // ⚠️ 指引必须指向**现在**的入口：设置页那块「多网盘账号」已整块删除，
-                //    四张网盘卡现在只在「登录」页（2026-10-26 修正过期指引）。
-                AppDialog.Show(this,
-                    "还没有登录" + panName + "。\n\n"
-                    + "请到「登录」页，点" + panName + "卡片上的「" + LoginEntryName + "」登录一次即可。",
-                    panName + "未登录", MessageBoxButton.OK, MessageBoxImage.Information);
+                NoticeNeedLogin("还没登录" + panName + "，已切到登录页");
                 provider.Dispose();
                 return;
             }
@@ -502,6 +536,18 @@ namespace GeZi
             _panProvider = provider;
             _panKind = shareRef.Kind;
             _panShareRef = shareRef;
+
+            // 🚨 2026-11-15：多网盘链路（UC / 阿里 / 迅雷）以前**只认链接里自带的提取码**，
+            //    压根不看用户填在「提取码」框里的内容 —— 用户在框里敲了码，解析照样报
+            //    「该迅雷分享需要提取码」（2026-11-15 真机日志实证）。
+            //    夸克链路（ParseShareCoreAsync）一直是「框里的码优先，链接里的兜底」，
+            //    这里补成同一口径，别让两家行为不一致。
+            string typedPasscode = (PassBox != null ? PassBox.Text : "").Trim();
+            if (!string.IsNullOrEmpty(typedPasscode))
+                shareRef.Passcode = typedPasscode;
+            else if (!string.IsNullOrEmpty(shareRef.Passcode) && PassBox != null)
+                PassBox.Text = shareRef.Passcode;   // 链接里带码就回填到框里，让用户看得见
+
             _passcode = shareRef.Passcode ?? "";
 
             // 2026-11-02：把分享 ID 同步写进 _pwdId。
@@ -521,7 +567,10 @@ namespace GeZi
             _dirSizeCache.Clear();
 
             long t0 = BusyClock();
-            if (!BeginBusy(ParseBtn, "解析中")) return;
+            // ⚠️ 口令解析那条路进来时按钮已经是忙态（alreadyBusy），再 BeginBusy 会
+            //    被"已在忙 → 拒绝重入"挡掉，这里就等于什么都没干就返回了。
+            bool ownsBusy = !alreadyBusy;
+            if (ownsBusy && !BeginBusy(ParseBtn, "解析中")) return;
             SetBusy(true);
             try
             {
@@ -538,6 +587,12 @@ namespace GeZi
                 bool canFree = shareRef.Kind == PanKind.Quark || shareRef.Kind == PanKind.Uc;
                 Log("解析成功（" + panName + (canFree ? "，支持免转存" : "，下载时自动转存")
                     + "）。双击文件夹进入子目录；选中文件后点「下载选中」即可下载。");
+                // 从收藏夹点进来的（收藏的是分享里的某个文件）→ 进目录后自动定位到那个文件
+                TryDrillToFavoriteTarget();
+                if (_files.Count == 0)
+                    NoticeParse("链接已失效或网络故障");
+                else
+                    NoticeParse("解析成功，共 " + _files.Count + " 个文件");
                 NotifyIfHidden("已解析 " + panName + " 分享",
                     _files.Count > 0
                         ? "共 " + _files.Count + " 个文件。双击托盘图标打开窗口即可下载。"
@@ -546,6 +601,7 @@ namespace GeZi
             catch (Exception ex)
             {
                 Log(panName + "解析失败: " + ex.Message);
+                NoticeParse("链接已失效或网络故障");
                 NotifyIfHidden(panName + "解析失败", ex.Message);
 
                 // 解析失败最常见的原因就是令牌过期（服务端 401 / token invalid）。
@@ -557,7 +613,9 @@ namespace GeZi
             finally
             {
                 SetBusy(false);
-                await EndBusyAsync(ParseBtn, t0);
+                // 只还原"自己开的"忙态：alreadyBusy 时按钮是外层（口令解析那条路）开的。
+                if (ownsBusy)
+                    await EndBusyAsync(ParseBtn, t0);
             }
         }
 
@@ -1027,6 +1085,17 @@ namespace GeZi
             if (DeleteFileSeparator != null)
                 DeleteFileSeparator.Visibility = canDelete ? Visibility.Visible : Visibility.Collapsed;
 
+            // 🚨 2026-11-15 新增「收藏文件」：
+            //   只在**分享模式** + 有选中项时出现。
+            //   · 我的网盘的文件没有分享链接，收藏了也没法「重新打开定位」；
+            //   · 没选中东西时也不知道该收藏谁。
+            bool canFavoriteFile = ShareMode
+                && FileList != null
+                && FileList.SelectedItems != null
+                && FileList.SelectedItems.Count > 0;
+            if (FavoriteFileMenuItem != null)
+                FavoriteFileMenuItem.Visibility = canFavoriteFile ? Visibility.Visible : Visibility.Collapsed;
+
             // 🚨 2026-11-02 空菜单兜底（用户报「右键只剩一个白点」）：
             //   原来这个菜单只有「免转存下载」一项，我的网盘模式下它被折叠 →
             //   弹出的是**完全空白的菜单**，视觉上就是一个白色小点。
@@ -1096,7 +1165,7 @@ namespace GeZi
 
         private async void OnDeleteCloudSelected(object sender, RoutedEventArgs e)
         {
-            if (!IsLoggedInAny) { Log("请先登录"); return; }
+            if (!IsLoggedInAny) { RequireLogin("删除网盘文件"); return; }
             if (ShareMode) { Log("「删除网盘文件」只在「我的网盘」模式下可用（分享里的文件属于分享者）"); return; }
 
             var selected = FileList.SelectedItems.Cast<ShareFileItem>().ToList();
@@ -1129,7 +1198,10 @@ namespace GeZi
                 {
                     // 夸克 / UC：走当前登录账号的 QuarkClient（带 keepalive，令牌最新）
                     await _client.DeleteAsync(fids);
-                    try { await _client.PurgeRecycleAsync(fids); } catch { }
+                    // 清空回收站是"锦上添花"：失败不影响删除本身（文件已进回收站），
+                    // 但**不能完全静默** —— 否则用户看到"删了但空间没释放"却查不到原因。
+                    try { await _client.PurgeRecycleAsync(fids); }
+                    catch (Exception pex) { LogDetail("清空回收站没成功（文件已在回收站里，不影响删除）: " + pex.Message); }
                 }
                 else
                 {
@@ -1143,6 +1215,35 @@ namespace GeZi
                 Log("已从网盘删除 " + fids.Count + " 项。");
                 // 🚨 必须 forceRefresh —— 否则读到删除前的缓存，文件看起来还在。
                 await LoadDirAsync(_curFid, forceRefresh: true);
+                // 🚨🚨 2026-11-14 回读校验：删除"成功"不等于"列表里真的没了"。
+                //   迅雷的 batchDelete 只是移入回收站，若列目录没带 trashed 过滤，
+                //   服务端会把已删文件照样发回来 —— 用户看到"删了还在，点下载又取不到直链"。
+                //   这里删完立刻比对一次，把这种"假成功"明确告诉用户，而不是让他自己猜。
+                var stillThere = new List<string>();
+                try
+                {
+                    if (_curDir != null && _curDir.Items != null)
+                    {
+                        var want = new HashSet<string>(fids, StringComparer.Ordinal);
+                        foreach (var it in _curDir.Items)
+                            if (it != null && !string.IsNullOrEmpty(it.Fid) && want.Contains(it.Fid))
+                                stillThere.Add(it.Name);
+                    }
+                }
+                catch { }
+                if (stillThere.Count > 0)
+                {
+                    Log("删除已提交，但列表里仍显示 " + stillThere.Count + " 项："
+                        + string.Join("、", stillThere.Take(5)));
+                    AppDialog.Show(this,
+                        "网盘已受理删除，但列表里还有 " + stillThere.Count + " 项没消失：\n\n"
+                        + string.Join("、", stillThere.Take(5))
+                        + (stillThere.Count > 5 ? " 等" : "") + "\n\n"
+                        + "这些文件多半只是进了网盘的「回收站」，并没有真正删除，"
+                        + "所以还会显示、也取不到直链。可以到网盘网页版清空回收站，"
+                        + "或者稍后点「刷新」再看一次。",
+                        "删除未完全生效", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
                 // 删文件会改变已用空间 —— 顺手把账号卡的容量也刷一下（用户要求）
                 await RefreshCapacityAsync();
             }

@@ -47,7 +47,7 @@ namespace GeZi
         /// 这类工具的用户最怕"来路不明的 exe"（见过太多捆绑木马的），
         /// 源码公开是他们判断可信度的第一依据 —— 比任何"本软件无毒"的声明都有用。
         /// </summary>
-        private const string RepoUrl = "https://github.com/huaotem-bot/gezi-quark-downloader";
+        private const string RepoUrl = "https://github.com/huaotem-bot/GeZi-downloader";
 
         /// <summary>功能特性（面向普通用户，一条一句话）。</summary>
         /// <remarks>
@@ -80,7 +80,7 @@ namespace GeZi
             try
             {
                 var ver = Assembly.GetExecutingAssembly().GetName().Version;
-                VersionPillText.Text = "v" + (ver != null ? ver.ToString(3) : "2.3.1");
+                VersionPillText.Text = "v" + (ver != null ? ver.ToString(3) : "2.4.4");
             }
             catch { }
 
