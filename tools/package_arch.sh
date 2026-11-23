@@ -97,15 +97,20 @@ run_makepkg_local() {
 run_makepkg_container() {
   command -v docker >/dev/null 2>&1 || die "既没有 makepkg 也没有 docker，无法生成 Arch 包"
   log "用容器 $CONTAINER_IMAGE 运行 makepkg …"
+  # 注意：不能 chown 挂载进来的宿主机目录 —— 会把 $WORK 变成 builder 所有，
+  # 脚本退出时的 rm -rf 就会 "Operation not permitted"。
+  # 所以 /seed 只读挂载，容器内复制一份给 builder 用。
   docker run --rm \
-    -v "$WORK:/build" \
+    -v "$WORK:/seed:ro" \
     -v "$OUT_DIR:/out" \
     "$CONTAINER_IMAGE" \
     bash -euc '
       pacman -Sy --noconfirm --needed fakeroot zstd >/dev/null
       useradd -m -s /bin/bash builder
-      chown -R builder /build /out
-      su builder -c "cd /build && PKGDEST=/out makepkg --force --nodeps --nocheck --noconfirm"
+      cp -a /seed /build
+      chown -R builder /build
+      su builder -c "cd /build && PKGDEST=/build/out makepkg --force --nodeps --nocheck --noconfirm"
+      cp /build/out/*.pkg.tar.zst /out/
     '
 }
 
@@ -121,7 +126,17 @@ PKG="$OUT_DIR/gezi-downloader-${VERSION}-1-x86_64.pkg.tar.zst"
 [ -f "$PKG" ] || die "makepkg 没有产出 gezi-downloader-${VERSION}-*.pkg.tar.zst"
 
 # 包内必须有关键文件，否则装上也起不来。
-LIST="$(bsdtar -tf "$PKG")"
+# 列表工具：Arch 自带 bsdtar；ubuntu runner 通常有 zstd，退化成 zstd -dc | tar -t。
+list_pkg() {
+  if command -v bsdtar >/dev/null 2>&1; then
+    bsdtar -tf "$1"
+  elif command -v zstd >/dev/null 2>&1; then
+    zstd -dc "$1" | tar -tf -
+  else
+    die "需要 bsdtar 或 zstd 来检查包内容"
+  fi
+}
+LIST="$(list_pkg "$PKG")"
 for want in opt/gezi/GeZi.Avalonia opt/gezi/libcoreclr.so \
             usr/bin/gezi-downloader usr/share/applications/gezi.desktop \
             usr/share/licenses/gezi-downloader/LICENSE; do
